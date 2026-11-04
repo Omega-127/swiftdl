@@ -622,7 +622,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "Escape") { state.selected = null; render(); }
 });
 
-const firstUrl = (t) => (t || "").split(/\s+/).find((s) => /^https?:\/\/\S+$/i.test(s));
+const firstUrl = (t) => (t || "").split(/\s+/).find((s) => /^(https?:\/\/|magnet:\?)\S+$/i.test(s));
 document.addEventListener("paste", (e) => {
   if (document.querySelector("dialog[open]") || e.target.matches?.("input")) return;
   const url = firstUrl(e.clipboardData.getData("text"));
@@ -744,7 +744,7 @@ function renderChips() {
 }
 async function probe() {
   const url = $("add-url").value.trim();
-  if (!/^https?:\/\/\S+/i.test(url)) { add.info = null; $("add-file").hidden = true; renderChips(); url ? setState("error", "Links start with http:// or https://") : setState("idle"); return; }
+  if (!/^(https?:\/\/|magnet:\?)\S+/i.test(url)) { add.info = null; $("add-file").hidden = true; renderChips(); url ? setState("error", "Paste a web link (http:// or https://) or a magnet link") : setState("idle"); return; }
   const seq = ++add.seq;
   // Video sites need a quality and torrents a file choice: their own window.
   const special = await invoke("is_media_url", { url }).catch(() => false) || await invoke("is_torrent_url", { url, filename: null }).catch(() => false);

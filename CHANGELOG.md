@@ -6,6 +6,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Magnet links and .torrent files did nothing** when you clicked Start
+  download or Download later: adding a download only accepted web links, and
+  the window didn't show the error. Magnet links and .torrent files on your
+  computer are now accepted, pasting a magnet link into New download works,
+  and any error adding a download is shown in the window.
+
 ### Added
 - **Firefox add-on.** The extension now runs in Firefox 128 and later, built
   from the same code with Firefox's manifest and shipped with the app and as
