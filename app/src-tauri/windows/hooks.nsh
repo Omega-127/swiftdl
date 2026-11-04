@@ -65,4 +65,5 @@ FunctionEnd
   !insertmacro SWIFTDL_UNREGISTER "Software\BraveSoftware\Brave-Browser"
   !insertmacro SWIFTDL_UNREGISTER "Software\Vivaldi"
   !insertmacro SWIFTDL_UNREGISTER "Software\Chromium"
+  DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\${SWIFTDL_HOST}"
 !macroend

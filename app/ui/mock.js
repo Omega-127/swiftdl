@@ -156,6 +156,7 @@
         { id: "brave", name: "Brave", installed: true, autoOffer: true, lastSeen: Date.now() - 16 * 60000 },
         { id: "vivaldi", name: "Vivaldi", installed: false, autoOffer: false },
         { id: "chromium", name: "Chromium", installed: false, autoOffer: false },
+        { id: "firefox", name: "Firefox", installed: true, autoOffer: false },
       ],
       lastSeen: Date.now() - 16 * 60000,
       storeUrl: "https://chromewebstore.google.com/detail/knmfjbmojepkdiflnckpfjimfmjfcbgh",

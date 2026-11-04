@@ -23,6 +23,8 @@ pub const HOST_NAME: &str = "com.swiftdl.host";
 /// `extension/manifest.json`; keep that key when publishing to the Chrome
 /// Web Store (upload `extension-key.pem` once) so the ID stays the same.
 pub const EXTENSION_IDS: &[&str] = &["knmfjbmojepkdiflnckpfjimfmjfcbgh"];
+/// The Firefox add-on's ID (browser_specific_settings in its manifest).
+pub const FIREFOX_ID: &str = "swiftdl@harshhh.me";
 pub const STORE_UPDATE_URL: &str = "https://clients2.google.com/service/update2/crx";
 
 /// Flip to `true` once the extension is live on the Chrome Web Store. Until
@@ -87,6 +89,8 @@ pub fn browser_from_exe(path: &str) -> Option<&'static str> {
         Some("edge")
     } else if name.starts_with("vivaldi") {
         Some("vivaldi")
+    } else if name.starts_with("firefox") {
+        Some("firefox")
     } else if p.contains("chromium") {
         Some("chromium")
     } else if name.starts_with("chrome") || name.starts_with("google chrome") {
@@ -126,7 +130,6 @@ pub fn register(data_dir: &Path) -> Result<()> {
 
     #[cfg(not(windows))]
     {
-        let _ = data_dir;
         for b in BROWSERS {
             let base = home().join(b.config_dir);
             if base.is_dir() {
@@ -134,6 +137,44 @@ pub fn register(data_dir: &Path) -> Result<()> {
                 std::fs::create_dir_all(&dir)?;
                 std::fs::write(dir.join(format!("{HOST_NAME}.json")), &body)?;
             }
+        }
+    }
+    register_firefox(data_dir, &exe)
+}
+
+/// Firefox keeps its own native messaging registration, naming the add-on
+/// by ID ("allowed_extensions") rather than by origin.
+fn register_firefox(data_dir: &Path, exe: &Path) -> Result<()> {
+    let manifest = json!({
+        "name": HOST_NAME,
+        "description": "SwiftDL download manager",
+        "path": exe,
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_ID],
+    });
+    let body = serde_json::to_vec_pretty(&manifest)?;
+    #[cfg(windows)]
+    {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_CURRENT_USER;
+        let dir = data_dir.join("native-host");
+        std::fs::create_dir_all(&dir)?;
+        let file = dir.join(format!("{HOST_NAME}.firefox.json"));
+        std::fs::write(&file, &body)?;
+        let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(format!(r"Software\Mozilla\NativeMessagingHosts\{HOST_NAME}"))?;
+        key.set_value("", &file.to_string_lossy().as_ref())?;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = data_dir;
+        #[cfg(target_os = "macos")]
+        let (profile, dir) = ("Library/Application Support/Firefox", "Library/Application Support/Mozilla/NativeMessagingHosts");
+        #[cfg(not(target_os = "macos"))]
+        let (profile, dir) = (".mozilla", ".mozilla/native-messaging-hosts");
+        if home().join(profile).is_dir() {
+            let dir = home().join(dir);
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join(format!("{HOST_NAME}.json")), &body)?;
         }
     }
     Ok(())
@@ -196,6 +237,7 @@ fn browser_exe(id: &str) -> Option<PathBuf> {
             "brave" => r"BraveSoftware\Brave-Browser\Application\brave.exe",
             "vivaldi" => r"Vivaldi\Application\vivaldi.exe",
             "chromium" => r"Chromium\Application\chrome.exe",
+            "firefox" => r"Mozilla Firefox\firefox.exe",
             _ => return None,
         };
         pf.into_iter().flatten().map(|b| b.join(rel)).find(|p| p.exists())
@@ -208,6 +250,7 @@ fn browser_exe(id: &str) -> Option<PathBuf> {
             "brave" => "Brave Browser.app",
             "vivaldi" => "Vivaldi.app",
             "chromium" => "Chromium.app",
+            "firefox" => "Firefox.app",
             _ => return None,
         };
         [PathBuf::from("/Applications").join(app), home().join("Applications").join(app)].into_iter().find(|p| p.exists())
@@ -220,6 +263,7 @@ fn browser_exe(id: &str) -> Option<PathBuf> {
             "brave" => &["brave-browser", "brave"],
             "vivaldi" => &["vivaldi", "vivaldi-stable"],
             "chromium" => &["chromium", "chromium-browser"],
+            "firefox" => &["firefox", "firefox-esr"],
             _ => return None,
         };
         let path = std::env::var_os("PATH")?;
@@ -290,21 +334,29 @@ pub struct IntegrationStatus {
 
 pub fn status() -> IntegrationStatus {
     let seen = read_seen();
+    let mut browsers: Vec<BrowserStatus> = BROWSERS
+        .iter()
+        .map(|b| BrowserStatus {
+            id: b.id,
+            name: b.name,
+            installed: browser_exe(b.id).is_some(),
+            auto_offer: b.external,
+            last_seen: seen["browsers"][b.id].as_u64(),
+        })
+        .collect();
+    browsers.push(BrowserStatus {
+        id: "firefox",
+        name: "Firefox",
+        installed: browser_exe("firefox").is_some(),
+        auto_offer: false,
+        last_seen: seen["browsers"]["firefox"].as_u64(),
+    });
     IntegrationStatus {
         store_available: STORE_PUBLISHED,
-        browsers: BROWSERS
-            .iter()
-            .map(|b| BrowserStatus {
-                id: b.id,
-                name: b.name,
-                installed: browser_exe(b.id).is_some(),
-                auto_offer: b.external,
-                last_seen: seen["browsers"][b.id].as_u64(),
-            })
-            .collect(),
         // Only contacts traced to a browser count, so a test or a host run
         // by something else doesn't show the extension as connected.
-        last_seen: BROWSERS.iter().filter_map(|b| seen["browsers"][b.id].as_u64()).max(),
+        last_seen: browsers.iter().filter_map(|b| b.last_seen).max(),
+        browsers,
         store_url: store_url(),
     }
 }

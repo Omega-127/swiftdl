@@ -12,8 +12,10 @@ use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 
+/// Chromium browsers pass the caller's origin; Firefox passes the path of
+/// the host manifest and the add-on's ID.
 pub fn is_native_host_launch(args: &[String]) -> bool {
-    args.iter().skip(1).any(|a| a.starts_with("chrome-extension://"))
+    args.iter().skip(1).any(|a| a.starts_with("chrome-extension://") || a == crate::browser::FIREFOX_ID)
 }
 
 pub fn run() {

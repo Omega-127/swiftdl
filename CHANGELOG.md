@@ -6,6 +6,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Firefox add-on.** The extension now runs in Firefox 128 and later, built
+  from the same code with Firefox's manifest and shipped with the app and as
+  `swiftdl-firefox.xpi`. SwiftDL registers its native messaging host for
+  Firefox, and Settings → Browser lists Firefox.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

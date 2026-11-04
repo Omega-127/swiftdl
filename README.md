@@ -142,7 +142,7 @@ Eight connections finishing in exactly an eighth of the time shows the rebalanci
 
 ## Browser extension
 
-The SwiftDL extension works in **Chrome, Edge, Brave and Vivaldi**:
+The SwiftDL extension works in **Chrome, Edge, Brave, Vivaldi and Firefox**:
 
 - Sends browser downloads to SwiftDL, with your cookies and referrer.
 - Adds **Download with SwiftDL** to the right-click menu on links and media.

@@ -41,7 +41,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../extension/": "extension/"
+      "../../extension/": "extension/",
+      "gen/extension-firefox/": "extension-firefox/"
     },
     "windows": {
       "nsis": {

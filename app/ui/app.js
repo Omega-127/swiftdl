@@ -412,6 +412,8 @@ async function openExtensionGuide() {
   const dir = await invoke("extension_dir").catch(() => null);
   $("ext-path").textContent = dir || "%LOCALAPPDATA%\\SwiftDL\\extension";
   $("ext-path").title = $("ext-path").textContent;
+  // The Firefox add-on is installed next to it, in extension-firefox.
+  $("ext-path-ff").textContent = $("ext-path").textContent.replace(/extension$/, "extension-firefox");
   $("dlg-ext").showModal();
 }
 $("ext-copy").innerHTML = icon("copy");

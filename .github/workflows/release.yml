@@ -43,7 +43,7 @@ jobs:
           - **Windows:** `SwiftDL_*_x64-setup.exe` (no admin rights needed)
           - **macOS:** `SwiftDL_*_universal.dmg`
           - **Linux:** `.AppImage`, `.deb` or `.rpm`
-          - **Browser extension:** included with the app. Open SwiftDL and click *Add the extension* for a short guide (Chrome, Edge, Brave and Vivaldi). `swiftdl-extension.zip` has the same files.
+          - **Browser extension:** included with the app. Open SwiftDL and click *Add the extension* for a short guide (Chrome, Edge, Brave, Vivaldi and Firefox). `swiftdl-extension.zip` (Chromium browsers) and `swiftdl-firefox.xpi` (Firefox) have the same files.
           EOF
       - name: Create draft release
         id: release
@@ -111,4 +111,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           (cd extension && zip -r ../swiftdl-extension.zip .)
-          gh release upload "$TAG" swiftdl-extension.zip --clobber
+          # The Firefox add-on: the same files with Firefox's manifest
+          # (keep in step with app/src-tauri/build.rs).
+          cp -r extension firefox
+          jq 'del(.key) | .background = {scripts: ["background.js"]}
+              | .browser_specific_settings = {gecko: {id: "swiftdl@harshhh.me", strict_min_version: "128.0"}}' \
+            extension/manifest.json > firefox/manifest.json
+          (cd firefox && zip -r ../swiftdl-firefox.xpi .)
+          gh release upload "$TAG" swiftdl-extension.zip swiftdl-firefox.xpi --clobber
