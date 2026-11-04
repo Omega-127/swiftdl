@@ -115,7 +115,8 @@ jobs:
           # (keep in step with app/src-tauri/build.rs).
           cp -r extension firefox
           jq 'del(.key) | .background = {scripts: ["background.js"]}
-              | .browser_specific_settings = {gecko: {id: "swiftdl@harshhh.me", strict_min_version: "128.0"}}' \
+              | .browser_specific_settings = {gecko: {id: "swiftdl@harshhh.me", strict_min_version: "140.0",
+                  data_collection_permissions: {required: ["none"]}}}' \
             extension/manifest.json > firefox/manifest.json
           (cd firefox && zip -r ../swiftdl-firefox.xpi .)
           gh release upload "$TAG" swiftdl-extension.zip swiftdl-firefox.xpi --clobber

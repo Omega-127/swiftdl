@@ -22,7 +22,14 @@ fn main() {
     m.insert("background".into(), serde_json::json!({ "scripts": ["background.js"] }));
     m.insert(
         "browser_specific_settings".into(),
-        serde_json::json!({ "gecko": { "id": FIREFOX_ID, "strict_min_version": "128.0" } }),
+        // Mozilla requires new add-ons to declare the data they collect. The
+        // add-on only hands downloads (and their cookies) to SwiftDL on the
+        // same computer; nothing is sent anywhere else. Needs Firefox 140+.
+        serde_json::json!({ "gecko": {
+            "id": FIREFOX_ID,
+            "strict_min_version": "140.0",
+            "data_collection_permissions": { "required": ["none"] },
+        } }),
     );
     fs::write(out.join("manifest.json"), serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
 
