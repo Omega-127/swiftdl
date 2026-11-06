@@ -488,9 +488,11 @@ function renderBrowserPanel() {
       <div class="sr-text"><b>${b.name}</b><span>${sub}</span></div>
       ${!b.lastSeen && b.installed ? `<button type="button" class="btn sm" data-add="${b.id}">Add to ${b.name}</button>` : ""}</div>`;
   }).join("");
+  $("ext-saveas").hidden = !connected.length;
   // The automatic offer only works once the extension is on the store.
   $("set-offer").closest(".set-group").hidden = !store;
 }
+$("set-log").onclick = () => call("open_log");
 $("browser-list").addEventListener("click", (e) => { const b = e.target.closest("[data-add]"); if (b) openExtensionGuide(b.dataset.add); });
 
 function render() {

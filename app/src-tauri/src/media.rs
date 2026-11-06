@@ -240,9 +240,10 @@ pub async fn probe(client: &Client, url: &str, cookies: Option<String>) -> Resul
     let note: Note = Arc::default();
     let tools = ensure_tools(client, &note, false).await?;
     let url = url.to_string();
+    let url_for_log = url.clone();
     let out = tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = ytdlp_command(&tools.ytdlp);
-        cmd.args(["-J", "--no-playlist", "--no-warnings"]);
+        cmd.args(["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "20"]);
         if let Some(c) = cookies.filter(|c| !c.is_empty()) {
             cmd.arg("--add-headers").arg(format!("Cookie:{c}"));
         }
@@ -250,6 +251,7 @@ pub async fn probe(client: &Client, url: &str, cookies: Option<String>) -> Resul
     })
     .await??;
     if !out.status.success() {
+        crate::log::line(&format!("yt-dlp couldn't read {url_for_log}: {}", String::from_utf8_lossy(&out.stderr).trim()));
         bail!("{}", last_error(&String::from_utf8_lossy(&out.stderr)).unwrap_or_else(|| "yt-dlp couldn't read this page".into()));
     }
     let info: Value = serde_json::from_slice(&out.stdout).context("yt-dlp gave an unexpected answer")?;

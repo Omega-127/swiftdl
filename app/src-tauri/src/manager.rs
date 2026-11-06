@@ -322,7 +322,7 @@ impl DownloadManager {
     pub fn set_settings(self: &Arc<Self>, settings: Settings) {
         self.limiter.set_rate(settings.speed_limit_kib * 1024);
         if let Err(e) = crate::browser::offer_extension(settings.offer_extension) {
-            eprintln!("could not update browser extension offer: {e:#}");
+            crate::log::line(&format!("could not update browser extension offer: {e:#}"));
         }
         // Open windows (download windows) follow the theme at once.
         let _ = self.app.emit("settings", &settings);
@@ -364,7 +364,7 @@ impl DownloadManager {
             token
         };
         if let Err(e) = crate::windows::open(&self.app, &format!("new-{token}"), &format!("confirm={token}"), "New download") {
-            eprintln!("could not open the New download window: {e:#}");
+            crate::log::line(&format!("could not open the New download window: {e:#}"));
         }
     }
 
@@ -406,7 +406,7 @@ impl DownloadManager {
         };
         for (id, title) in to_open {
             if let Err(e) = crate::windows::open(&self.app, &format!("dl-{id}"), &format!("id={id}"), &title) {
-                eprintln!("could not open the download window: {e:#}");
+                crate::log::line(&format!("could not open the download window: {e:#}"));
             }
         }
     }
@@ -528,6 +528,7 @@ impl DownloadManager {
                         Err(e) => {
                             item.status = Status::Error;
                             item.error = Some(format!("{e:#}"));
+                            crate::log::line(&format!("download {} failed ({}): {e:#}", item.filename, item.url));
                         }
                     }
                 }

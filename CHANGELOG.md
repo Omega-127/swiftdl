@@ -6,7 +6,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Debug log.** SwiftDL writes what it does and any errors (failed
+  downloads, yt-dlp errors, crashes) to `swiftdl.log` in its data folder.
+  Settings → About → Open log, to attach to a bug report. (#4)
+
 ### Fixed
+- **Pasting a YouTube or magnet link froze the app** on Windows: the New
+  download window was created on the main thread, which deadlocks WebView2.
+  Windows are now created on their own thread. (#4)
+- Reading a video page gives up after 20 seconds without an answer instead
+  of waiting forever.
 - **Chromium forks can connect** (Helium, Thorium, ungoogled-chromium, Opera
   and others): on macOS and Linux SwiftDL now registers its native messaging
   host in any Chromium-style profile folder, not only five known browsers. (#2)
@@ -24,6 +34,8 @@ uses [Semantic Versioning](https://semver.org/).
   browser has an *Add to …* button that opens that browser's extensions page
   and copies the folder path, and the guide closes by itself as soon as the
   extension connects. (#1)
+- Settings → Browser explains how to stop the browser's own Save As prompt
+  showing as well as SwiftDL's. (#4)
 - Settings → Browser shows the browsers' real logos, with status as text, and
   hides Save and Cancel when there's nothing to save.
 

@@ -4,6 +4,7 @@
 mod browser;
 mod commands;
 mod manager;
+mod log;
 mod media;
 mod native_host;
 mod settings;
@@ -52,6 +53,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    log::install_panic_hook();
     let args: Vec<String> = std::env::args().collect();
     if native_host::is_native_host_launch(&args) {
         native_host::run();
@@ -72,24 +74,25 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            log::line(&format!("SwiftDL {} starting on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
             let data_dir = app.path().app_data_dir()?;
             let downloads = app.path().download_dir().unwrap_or_else(|_| data_dir.join("Downloads"));
             let mgr = DownloadManager::new(app.handle().clone(), data_dir.clone(), downloads)?;
             if let Err(e) = browser::register(&data_dir) {
-                eprintln!("browser integration not registered: {e:#}");
+                crate::log::line(&format!("browser integration not registered: {e:#}"));
             }
             if let Err(e) = torrent::register_handlers() {
-                eprintln!("magnet and .torrent handlers not registered: {e:#}");
+                crate::log::line(&format!("magnet and .torrent handlers not registered: {e:#}"));
             }
             if let Err(e) = browser::offer_extension(mgr.settings().offer_extension) {
-                eprintln!("could not offer the browser extension: {e:#}");
+                crate::log::line(&format!("could not offer the browser extension: {e:#}"));
             }
             app.manage(mgr.clone());
             if let Some(main) = app.get_webview_window("main") {
                 windows::polish(&main);
             }
             if let Err(e) = build_tray(app.handle()) {
-                eprintln!("tray icon not available: {e:#}");
+                crate::log::line(&format!("tray icon not available: {e:#}"));
             }
             mgr.start_ticker();
             // Launched by the browser extension: show only the small
@@ -120,6 +123,7 @@ fn main() {
             commands::extension_dir,
             commands::open_extension_folder,
             commands::open_extensions_page,
+            commands::open_log,
             commands::pick_folder,
             commands::integration_status,
             commands::open_store,

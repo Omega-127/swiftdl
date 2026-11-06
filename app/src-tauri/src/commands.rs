@@ -189,6 +189,15 @@ pub fn open_store(m: Mgr, browser: String) -> Result<(), String> {
     crate::browser::open_store_in(m.app_handle(), &browser).map_err(|e| format!("{e:#}"))
 }
 
+/// Opens the log file in the system's text viewer, for bug reports.
+#[tauri::command]
+pub fn open_log(m: Mgr) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = crate::log::path();
+    if !p.exists() { crate::log::line("log opened"); }
+    m.app_handle().opener().open_path(p.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn open_extensions_page(browser: String) -> Result<(), String> {
     crate::browser::open_extensions_page(&browser).map_err(|e| format!("{e:#}"))

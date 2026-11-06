@@ -173,7 +173,7 @@
       storeUrl: "https://chromewebstore.google.com/detail/knmfjbmojepkdiflnckpfjimfmjfcbgh",
       storeAvailable: false,
     }),
-    open_store: () => {}, open_extensions_page: () => {},
+    open_store: () => {}, open_extensions_page: () => {}, open_log: () => {},
     get_item: ({ id }) => JSON.parse(JSON.stringify(items.find((i) => i.id === id) || null)),
     confirm_info: () => (location.search.includes("torrent") ? { url: "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Blender+Open+Movies", filename: "" } : VIDEO && !location.search.includes("yt") ? { url: "https://releases.ubuntu.com/26.04.1/ubuntu-26.04.1-desktop-amd64.iso", filename: "", referrer: "https://ubuntu.com/download/desktop" } : location.search.includes("yt") ? { url: "https://www.youtube.com/watch?v=aqz-KE-bpKQ", filename: "" } : { url: "https://cdn.example.net/releases/Obsidian-2.4.1-setup.exe", filename: "", referrer: "https://obsidian.example.net/download" }),
     forget_confirm: () => {}, show_main: () => {},
