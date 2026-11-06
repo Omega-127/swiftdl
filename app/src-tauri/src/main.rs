@@ -119,6 +119,7 @@ fn main() {
             commands::open_url,
             commands::extension_dir,
             commands::open_extension_folder,
+            commands::open_extensions_page,
             commands::pick_folder,
             commands::integration_status,
             commands::open_store,

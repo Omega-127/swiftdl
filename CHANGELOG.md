@@ -6,6 +6,27 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Chromium forks can connect** (Helium, Thorium, ungoogled-chromium, Opera
+  and others): on macOS and Linux SwiftDL now registers its native messaging
+  host in any Chromium-style profile folder, not only five known browsers. (#2)
+- **YouTube on systems without a bundled JavaScript runtime**: yt-dlp is told
+  to use Deno, Node, Bun or QuickJS when one is installed, videos that only
+  offer separate video and audio streams still download, and a missing
+  runtime gets a clear message instead of "Requested format is not
+  available". (#3)
+- **Add the extension did nothing**: the banner was rebuilt every 15 seconds,
+  which could swallow the click. (#1)
+
+### Changed
+- **One way to add the extension.** The banner, the empty state, the command
+  palette and Settings → Browser all open the same guide. Each installed
+  browser has an *Add to …* button that opens that browser's extensions page
+  and copies the folder path, and the guide closes by itself as soon as the
+  extension connects. (#1)
+- Settings → Browser shows the browsers' real logos, with status as text, and
+  hides Save and Cancel when there's nothing to save.
+
 ## [0.3.1] - 2026-11-04
 
 ### Fixed

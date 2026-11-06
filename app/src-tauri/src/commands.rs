@@ -189,6 +189,11 @@ pub fn open_store(m: Mgr, browser: String) -> Result<(), String> {
     crate::browser::open_store_in(m.app_handle(), &browser).map_err(|e| format!("{e:#}"))
 }
 
+#[tauri::command]
+pub fn open_extensions_page(browser: String) -> Result<(), String> {
+    crate::browser::open_extensions_page(&browser).map_err(|e| format!("{e:#}"))
+}
+
 /// Runs off the main thread (async command), so the blocking picker is safe.
 #[tauri::command]
 pub async fn pick_folder(m: Mgr<'_>, start: Option<PathBuf>) -> Result<Option<PathBuf>, String> {

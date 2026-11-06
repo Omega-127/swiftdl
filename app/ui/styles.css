@@ -529,3 +529,10 @@ code { font: 11.5px ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospac
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--faint); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Extension guide: open the page in a browser, then wait for it to connect */
+.guide-browsers { display: flex !important; flex-wrap: wrap; gap: 6px; margin-top: 8px !important; }
+.guide-browsers:empty { display: none !important; }
+.guide-browsers .btn { gap: 6px; }
+.blogo.sm { width: 16px; height: 16px; }
+.guide-wait { margin: 16px 0 0; font-size: 12.5px; color: var(--muted); }

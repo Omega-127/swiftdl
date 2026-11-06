@@ -406,16 +406,52 @@ function renderOnboard() {
   const html = `<span class="ob-icon">${icon("globe")}</span>
     <span class="ob-text"><b>Connect your browser</b>Catch downloads automatically and get a download button on videos</span>
     <span class="ob-actions">${actions}<button class="sq-btn" data-dismiss title="Dismiss">${icon("x")}</button></span>`;
-  if (card.innerHTML !== html) card.innerHTML = html;
+  // innerHTML never reads back identical, so compare with what we wrote last;
+  // rebuilding it on every poll replaced the button mid-click.
+  if (card.dataset.html !== html) { card.innerHTML = html; card.dataset.html = html; }
 }
-async function openExtensionGuide() {
+// One flow for every entry point: the banner, the empty state, the command
+// palette and each browser in Settings → Browser.
+const EXT_PAGE = { edge: "edge://extensions", brave: "brave://extensions", vivaldi: "vivaldi://extensions", firefox: "about:debugging" };
+let guidePoll = null;
+async function openExtensionGuide(browserId) {
+  const i = state.integration;
+  if (i?.storeAvailable && browserId && browserId !== "firefox") return openStore(browserId);
   const dir = await invoke("extension_dir").catch(() => null);
-  $("ext-path").textContent = dir || "%LOCALAPPDATA%\\SwiftDL\\extension";
-  $("ext-path").title = $("ext-path").textContent;
-  // The Firefox add-on is installed next to it, in extension-firefox.
-  $("ext-path-ff").textContent = $("ext-path").textContent.replace(/extension$/, "extension-firefox");
-  $("dlg-ext").showModal();
+  const ff = browserId === "firefox";
+  const path = (dir || "%LOCALAPPDATA%\SwiftDL\extension") + (ff ? "-firefox" : "");
+  $("ext-path").textContent = path;
+  $("ext-path").title = path;
+  const b = installedBrowsers().find((x) => x.id === browserId);
+  $("ext-step1").innerHTML = ff
+    ? "Firefox: open <code>about:debugging</code>, choose This Firefox, then Load Temporary Add-on and pick <code>manifest.json</code> in the folder below"
+    : `Type <code>${EXT_PAGE[browserId] || "chrome://extensions"}</code> in the address bar${b ? `, or open it in ${b.name}:` : ""}`;
+  const choices = b ? [b] : installedBrowsers().filter((x) => x.id !== "firefox");
+  $("ext-browsers").innerHTML = choices.map((x) => `<button type="button" class="btn sm" data-open-ext="${x.id}"><img class="blogo sm" src="browsers/${x.id}.svg" alt="">Open in ${x.name}</button>`).join("");
+  $("ext-wait").textContent = "Waiting for the extension to connect…";
+  if (!$("dlg-ext").open) $("dlg-ext").showModal();
+  if (b) openExtPage(b.id);
+  // Check often while the guide is open, so it notices the connection at once.
+  clearInterval(guidePoll);
+  const before = i?.lastSeen || 0;
+  guidePoll = setInterval(async () => {
+    if (!$("dlg-ext").open) return clearInterval(guidePoll);
+    await loadIntegration();
+    const now = state.integration;
+    if ((now?.lastSeen || 0) > before) {
+      clearInterval(guidePoll);
+      const who = now.browsers.filter((x) => x.lastSeen).sort((x, y) => y.lastSeen - x.lastSeen)[0];
+      $("dlg-ext").close();
+      toast(`Connected in ${who?.name || "your browser"}`, "ok");
+    }
+  }, 1500);
 }
+async function openExtPage(id) {
+  copy($("ext-path").textContent, "Folder path copied, paste it into the picker");
+  try { await invoke("open_extensions_page", { browser: id }); }
+  catch (e) { toast(String(e), "err"); }
+}
+$("ext-browsers").addEventListener("click", (e) => { const b = e.target.closest("[data-open-ext]"); if (b) openExtPage(b.dataset.openExt); });
 $("ext-copy").innerHTML = icon("copy");
 $("ext-copy").onclick = () => copy($("ext-path").textContent, "Folder path copied");
 $("ext-open").onclick = () => call("open_extension_folder");
@@ -436,7 +472,7 @@ function renderBrowserPanel() {
   const i = state.integration;
   if (!i) return;
   const store = i.storeAvailable;
-  const hint = store ? "Add it to a browser below, then open that browser once" : "Follow the steps below, then open the browser once";
+  const hint = "Click Add next to a browser below";
   const connected = i.browsers.filter((b) => b.lastSeen).sort((a, b) => b.lastSeen - a.lastSeen);
   const logo = (b, cls = "") => `<img class="blogo ${cls}" src="browsers/${b.id}.svg" alt="" width="28" height="28">`;
   $("ext-status").innerHTML = connected.length
@@ -450,16 +486,12 @@ function renderBrowserPanel() {
     return `<div class="set-row">
       ${logo(b, b.installed || b.lastSeen ? "" : "off")}
       <div class="sr-text"><b>${b.name}</b><span>${sub}</span></div>
-      ${!b.lastSeen && b.installed && store ? `<button type="button" class="btn sm" data-store="${b.id}">Add extension</button>` : ""}</div>`;
+      ${!b.lastSeen && b.installed ? `<button type="button" class="btn sm" data-add="${b.id}">Add to ${b.name}</button>` : ""}</div>`;
   }).join("");
-  // No store listing yet: show the manual steps up front, and hide the
-  // automatic offer, which only works once the extension is on the store.
-  const manual = document.querySelector(".manual");
-  manual.open = !store;
-  manual.querySelector("summary").textContent = store ? "Install manually" : "How to add it";
+  // The automatic offer only works once the extension is on the store.
   $("set-offer").closest(".set-group").hidden = !store;
 }
-$("browser-list").addEventListener("click", (e) => { const b = e.target.closest("[data-store]"); if (b) openStore(b.dataset.store); });
+$("browser-list").addEventListener("click", (e) => { const b = e.target.closest("[data-add]"); if (b) openExtensionGuide(b.dataset.add); });
 
 function render() {
   if (state.selected != null && !byId(state.selected)) state.selected = null;
@@ -584,7 +616,7 @@ $("btn-resume-all").onclick = () => resume(visible().filter((i) => i.status === 
 $("btn-add").onclick = $("empty-add").onclick = () => openComposer();
 $("btn-palette").onclick = $("btn-search").onclick = () => openPalette();
 $("btn-settings").onclick = () => openSettings();
-$("empty-ext").onclick = () => openSettings("browser");
+$("empty-ext").onclick = () => openExtensionGuide();
 $("w-min").onclick = () => appWindow?.minimize();
 $("w-max").onclick = () => appWindow?.toggleMaximize();
 $("w-close").onclick = () => appWindow?.close();
@@ -650,7 +682,7 @@ function paletteItems(q) {
     { icon: "play", label: "Resume all downloads", run: () => resume(state.items.filter((i) => i.status === "paused" || i.status === "error").map((i) => i.id)) },
     ...LIMITS.map((k) => ({ icon: "gauge", label: k ? `Limit speed to ${bytes(k * 1024)}/s` : "Remove speed limit", run: () => setLimit(k) })),
     { icon: "settings", label: "Open settings", keys: ["Ctrl", ","], run: () => openSettings() },
-    { icon: "globe", label: "Set up browser extension", run: () => openSettings("browser") },
+    { icon: "globe", label: "Set up browser extension", run: () => openExtensionGuide() },
   ].filter((a) => match(a.label));
   const views = [
     ...Object.entries(VIEWS).map(([k, v]) => ({ icon: v.icon, label: `Go to ${v.name}`, run: () => { state.view = k; render(); } })),
@@ -854,6 +886,8 @@ $("set-limit-custom").addEventListener("input", (e) => { setLimitKib = Math.max(
 function showTab(tab) {
   $("set-nav").querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== tab));
+  // Nothing to save on these tabs (Browser has a setting only once the store listing exists).
+  $("dlg-settings").querySelector(".set-foot").hidden = tab === "about" || (tab === "browser" && !state.integration?.storeAvailable);
 }
 $("set-nav").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
 document.querySelectorAll(".stepper").forEach((st) => st.addEventListener("click", (e) => {
@@ -864,7 +898,6 @@ document.querySelectorAll(".stepper").forEach((st) => st.addEventListener("click
 }));
 $("set-browse").onclick = async () => { const d = await call("pick_folder", { start: setDir || null }); if (d) { setDir = d; $("set-dir").textContent = d; } };
 $("set-cancel").onclick = () => { restoreTheme(); $("dlg-settings").close(); };
-$("set-ext-folder").onclick = () => call("open_extension_folder");
 async function saveSettings(s) { await call("set_settings", { settings: s }); state.settings = s; render(); }
 $("form-settings").addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -191,6 +191,29 @@ fn command(program: &Path) -> Command {
     cmd
 }
 
+/// A yt-dlp command, told which JavaScript runtime to use. Current yt-dlp
+/// needs one for full YouTube extraction; without it some formats go missing.
+fn ytdlp_command(ytdlp: &Path) -> Command {
+    let mut cmd = command(ytdlp);
+    if let Some(rt) = js_runtime() {
+        cmd.args(["--js-runtimes", rt]);
+    }
+    cmd
+}
+
+/// The first JavaScript runtime yt-dlp supports that's on PATH.
+fn js_runtime() -> Option<&'static str> {
+    static FOUND: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let path = std::env::var_os("PATH")?;
+        let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd"] } else { &[""] };
+        ["deno", "node", "bun", "quickjs"].into_iter().find(|name| {
+            let bin = if *name == "quickjs" { "qjs" } else { name };
+            std::env::split_paths(&path).any(|d| exts.iter().any(|e| d.join(format!("{bin}{e}")).is_file()))
+        })
+    })
+}
+
 // ---------- probing ----------
 
 #[derive(Serialize)]
@@ -218,7 +241,7 @@ pub async fn probe(client: &Client, url: &str, cookies: Option<String>) -> Resul
     let tools = ensure_tools(client, &note, false).await?;
     let url = url.to_string();
     let out = tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = command(&tools.ytdlp);
+        let mut cmd = ytdlp_command(&tools.ytdlp);
         cmd.args(["-J", "--no-playlist", "--no-warnings"]);
         if let Some(c) = cookies.filter(|c| !c.is_empty()) {
             cmd.arg("--add-headers").arg(format!("Cookie:{c}"));
@@ -285,13 +308,17 @@ fn qualities(info: &Value) -> Vec<Quality> {
         });
     }
     if list.is_empty() {
-        list.push(Quality { label: "Best quality".into(), format: "b".into(), ext: info["ext"].as_str().unwrap_or("mp4").into(), size: None });
+        list.push(Quality { label: "Best quality".into(), format: "bv*+ba/b".into(), ext: info["ext"].as_str().unwrap_or("mp4").into(), size: None });
     }
     list
 }
 
 fn last_error(stderr: &str) -> Option<String> {
-    stderr.lines().rev().find_map(|l| l.strip_prefix("ERROR: ")).map(|e| e.trim().to_string())
+    let e = stderr.lines().rev().find_map(|l| l.strip_prefix("ERROR: ")).map(|e| e.trim().to_string())?;
+    if e.contains("Requested format is not available") && js_runtime().is_none() {
+        return Some("This site needs a JavaScript runtime for yt-dlp. Install Node.js or Deno, then try again.".into());
+    }
+    Some(e)
 }
 
 // ---------- downloading ----------
@@ -320,7 +347,7 @@ pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note,
     }
     set_note(&note, "Getting video details");
 
-    let mut cmd = command(&tools.ytdlp);
+    let mut cmd = ytdlp_command(&tools.ytdlp);
     cmd.args(["-f", &job.format, "--no-playlist", "--newline", "--no-colors", "--no-mtime", "-N", "4"])
         .args(["--progress-template", "download:SDL|%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s"]);
     if merges {

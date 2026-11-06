@@ -149,7 +149,18 @@
     open_file: () => {}, open_folder: () => {}, open_url: () => {}, open_extension_folder: () => {},
     extension_dir: () => "C:\\Users\\you\\AppData\\Local\\SwiftDL\\extension",
     default_dir: ({ filename }) => dirFor(catFor(filename)),
-    integration_status: () => ({
+    // ?noext previews the not-connected case.
+    integration_status: () => (location.search.includes("noext") ? {
+      browsers: [
+        { id: "chrome", name: "Chrome", installed: true, autoOffer: true },
+        { id: "edge", name: "Edge", installed: true, autoOffer: true },
+        { id: "brave", name: "Brave", installed: true, autoOffer: true },
+        { id: "vivaldi", name: "Vivaldi", installed: false, autoOffer: false },
+        { id: "chromium", name: "Chromium", installed: false, autoOffer: false },
+        { id: "firefox", name: "Firefox", installed: true, autoOffer: false },
+      ],
+      lastSeen: null, storeUrl: "", storeAvailable: false,
+    } : {
       browsers: [
         { id: "chrome", name: "Chrome", installed: true, autoOffer: true },
         { id: "edge", name: "Edge", installed: true, autoOffer: true },
@@ -162,7 +173,7 @@
       storeUrl: "https://chromewebstore.google.com/detail/knmfjbmojepkdiflnckpfjimfmjfcbgh",
       storeAvailable: false,
     }),
-    open_store: () => {},
+    open_store: () => {}, open_extensions_page: () => {},
     get_item: ({ id }) => JSON.parse(JSON.stringify(items.find((i) => i.id === id) || null)),
     confirm_info: () => (location.search.includes("torrent") ? { url: "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Blender+Open+Movies", filename: "" } : VIDEO && !location.search.includes("yt") ? { url: "https://releases.ubuntu.com/26.04.1/ubuntu-26.04.1-desktop-amd64.iso", filename: "", referrer: "https://ubuntu.com/download/desktop" } : location.search.includes("yt") ? { url: "https://www.youtube.com/watch?v=aqz-KE-bpKQ", filename: "" } : { url: "https://cdn.example.net/releases/Obsidian-2.4.1-setup.exe", filename: "", referrer: "https://obsidian.example.net/download" }),
     forget_confirm: () => {}, show_main: () => {},
