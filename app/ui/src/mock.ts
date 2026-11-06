@@ -2,6 +2,10 @@
 // (no Tauri). Simulates downloads, including per-connection segments and
 // dynamic splitting, so the UI can be developed without building Rust.
 // In the real app this file does nothing.
+import type { Item, Settings, Status, Commands } from "./api";
+
+declare global { interface Window { __video?: unknown } }
+
 (() => {
   if (window.__TAURI__) return;
   // ?video: the launch film drives this page frame by frame (video/launch.html),
@@ -11,13 +15,13 @@
   const MB = 1024 * 1024, GB = 1024 * MB;
   const now = Date.now();
   let nextId = 1;
-  let settings = {
+  let settings: Settings = {
     downloadDir: "C:\\Users\\you\\Downloads", connections: 8, maxConcurrent: 3, speedLimitKib: 0,
     sortIntoCategories: true, askBeforeDownload: true, notifyOnComplete: true,
     offerExtension: true, onboardingDismissed: false, showProgressWindow: true, closeToTray: true, theme: "system", seedUntil: "stop",
   };
   if (VIDEO) Object.assign(settings, { downloadDir: "C:\\Users\\Harsh\\Downloads", onboardingDismissed: true });
-  const catFor = (name) => {
+  const catFor = (name: string) => {
     const ext = (name.split(".").pop() || "").toLowerCase();
     if (["zip", "rar", "7z", "gz", "iso", "xz", "tar"].includes(ext)) return "Compressed";
     if (["pdf", "doc", "docx", "txt", "epub", "xlsx"].includes(ext)) return "Documents";
@@ -27,37 +31,39 @@
     if (["jpg", "png", "gif", "webp"].includes(ext)) return "Images";
     return "Other";
   };
-  const dirFor = (cat) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
+  const dirFor = (cat: string) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
 
   // Each simulated download keeps a list of segments {pos, end} like the engine.
-  const sims = new Map();
-  function makeSegs(size, n, doneFrac = 0) {
-    const chunk = size / n, segs = [];
+  interface Seg { start: number; pos: number; end: number; rate: number }
+  const sims = new Map<number, Seg[]>();
+  function makeSegs(size: number, n: number, doneFrac = 0): Seg[] {
+    const chunk = size / n, segs: Seg[] = [];
     for (let i = 0; i < n; i++) {
       const start = Math.floor(i * chunk), end = i === n - 1 ? size : Math.floor((i + 1) * chunk);
       segs.push({ start, pos: Math.floor(start + (end - start) * doneFrac * (0.6 + Math.random() * 0.8)), end, rate: 0.6 + Math.random() * 0.8 });
-      segs.at(-1).pos = Math.min(segs.at(-1).pos, end);
+      segs[i].pos = Math.min(segs[i].pos, end);
     }
     return segs;
   }
-  function item(filename, size, status, ago, extra = {}) {
+  function item(filename: string, size: number, status: Status, ago: number, extra: Partial<Item> & { frac?: number } = {}): Item {
     const category = catFor(filename);
-    const it = {
+    const { frac = 0, ...rest } = extra;
+    const it: Item = {
       id: nextId++, url: `https://downloads.example.com/files/${encodeURIComponent(filename)}`, filename,
       path: `${dirFor(category)}\\${filename}`, size, downloaded: status === "completed" ? size : 0, status, error: null, category,
       addedAt: now - ago * 60000, completedAt: status === "completed" ? now - ago * 60000 + 90000 : null,
-      resumable: true, headers: [], remaining: [], speed: 0, connections: 0, ...extra,
+      resumable: true, headers: [], remaining: [], segments: [], speed: 0, connections: 0, format: null, torrentFiles: null, note: null, ...rest,
     };
-    if (status !== "completed" && size) sims.set(it.id, makeSegs(size, settings.connections, extra.frac || 0));
+    if (status !== "completed" && size) sims.set(it.id, makeSegs(size, settings.connections, frac));
     sync(it);
     return it;
   }
-  function sync(it) {
+  function sync(it: Item) {
     const segs = sims.get(it.id);
     if (!segs) return;
-    it.remaining = segs.filter((s) => s.pos < s.end).map((s) => [s.pos, s.end]);
-    it.segments = segs.map((s) => [s.start, s.pos, s.end]).sort((a, b) => a[0] - b[0]);
-    it.downloaded = it.size - it.remaining.reduce((a, [p, e]) => a + (e - p), 0);
+    it.remaining = segs.filter((s) => s.pos < s.end).map((s): [number, number] => [s.pos, s.end]);
+    it.segments = segs.map((s): [number, number, number] => [s.start, s.pos, s.end]).sort((a, b) => a[0] - b[0]);
+    it.downloaded = (it.size || 0) - it.remaining.reduce((a, [p, e]) => a + (e - p), 0);
   }
 
   const items = [
@@ -72,9 +78,10 @@
     item("podcast-episode-212.mp3", 61 * MB, "completed", 4000),
   ];
 
-  const listeners = {};
-  const emit = (ev, payload) => (listeners[ev] || []).forEach((cb) => cb({ payload }));
-  const clone = () => JSON.parse(JSON.stringify(items));
+  type Listener = (e: { payload: unknown }) => void;
+  const listeners: Record<string, Listener[]> = {};
+  const emit = (ev: string, payload: unknown) => (listeners[ev] || []).forEach((cb) => cb({ payload }));
+  const clone = (): Item[] => JSON.parse(JSON.stringify(items));
 
   function schedule() {
     let running = items.filter((i) => i.status === "downloading").length;
@@ -89,7 +96,7 @@
     const active = items.filter((i) => i.status === "downloading");
     for (const it of items) {
       if (it.status !== "downloading") { it.speed = 0; it.connections = 0; continue; }
-      const segs = sims.get(it.id) || (sims.set(it.id, makeSegs(it.size, settings.connections)), sims.get(it.id));
+      const segs = sims.get(it.id) || (sims.set(it.id, makeSegs(it.size || 0, settings.connections)), sims.get(it.id)!);
       let perConn = (1.1 + Math.random() * 0.6) * MB; // like a server capping each connection
       if (limit) perConn = Math.min(perConn, limit / active.length / Math.max(1, segs.length));
       let got = 0;
@@ -104,7 +111,7 @@
         const big = busy.sort((a, b) => (b.end - b.pos) - (a.end - a.pos))[0];
         if (!big || big.end - big.pos < 4 * MB) break;
         const mid = Math.floor(big.pos + (big.end - big.pos) / 2);
-        const s = { start: mid, pos: mid, end: big.end, rate: 0.6 + Math.random() * 0.8 };
+        const s: Seg = { start: mid, pos: mid, end: big.end, rate: 0.6 + Math.random() * 0.8 };
         big.end = mid; segs.push(s); busy.push(s);
       }
       const inst = got * 2;
@@ -112,7 +119,7 @@
       it.connections = busy.length;
       sync(it);
       if (!it.remaining.length) {
-        Object.assign(it, { status: "completed", completedAt: Date.now(), speed: 0, connections: 0, downloaded: it.size });
+        Object.assign(it, { status: "completed", completedAt: Date.now(), speed: 0, connections: 0, downloaded: it.size || 0 });
         sims.delete(it.id);
       }
     }
@@ -122,12 +129,13 @@
   if (VIDEO) {
     window.__video = {
       step,
-      set(id, patch) { const it = items.find((i) => i.id === id); if (it) { Object.assign(it, patch); sims.delete(id); } emit("downloads", clone()); },
+      set(id: number, patch: Partial<Item>) { const it = items.find((i) => i.id === id); if (it) { Object.assign(it, patch); sims.delete(id); } emit("downloads", clone()); },
       last: () => items.at(-1),
     };
   } else setInterval(step, 500);
 
-  const commands = {
+  type Impl = { [K in keyof Commands]: (args: Commands[K][0]) => Commands[K][1] | Promise<Commands[K][1]> };
+  const commands: Impl = {
     get_state: () => ({ items: clone(), settings: { ...settings }, pending: [], version: "0.1.0 (preview)" }),
     probe_url: async ({ url }) => {
       if (!VIDEO) await new Promise((r) => setTimeout(r, 700));
@@ -198,12 +206,13 @@
 
   window.__TAURI__ = {
     core: {
-      invoke: async (cmd, args = {}) => {
-        if (!commands[cmd]) throw new Error(`mock: unknown command ${cmd}`);
-        return commands[cmd](args);
+      invoke: async (cmd: string, args: unknown = {}) => {
+        const fn = (commands as Record<string, (a: unknown) => unknown>)[cmd];
+        if (!fn) throw new Error(`mock: unknown command ${cmd}`);
+        return fn(args);
       },
     },
-    event: { listen: async (ev, cb) => { (listeners[ev] ||= []).push(cb); return () => {}; } },
+    event: { listen: async (ev: string, cb: Listener) => { (listeners[ev] ||= []).push(cb); return () => {}; } },
   };
 
   if (!VIDEO) document.addEventListener("DOMContentLoaded", () => {

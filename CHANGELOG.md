@@ -6,6 +6,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The interface is TypeScript.** `app/ui` is built by Vite in strict
+  TypeScript, and every call to the backend is checked against the Rust
+  types, so a mismatch is a build error. The look is unchanged.
+
 ### Added
 - **Debug log.** SwiftDL writes what it does and any errors (failed
   downloads, yt-dlp errors, crashes) to `swiftdl.log` in its data folder.
@@ -15,6 +20,10 @@ uses [Semantic Versioning](https://semver.org/).
 - **Pasting a YouTube or magnet link froze the app** on Windows: the New
   download window was created on the main thread, which deadlocks WebView2.
   Windows are now created on their own thread. (#4)
+- Double-clicking a running download did nothing: the row's details are
+  redrawn every half second, which swallowed the second click.
+- The extension guide showed the folder path without its backslashes when
+  SwiftDL couldn't look it up.
 - Reading a video page gives up after 20 seconds without an answer instead
   of waiting forever.
 - **Chromium forks can connect** (Helium, Thorium, ungoogled-chromium, Opera

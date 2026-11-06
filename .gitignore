@@ -3,3 +3,5 @@
 node_modules/
 /app/src-tauri/gen/
 /.claude/
+node_modules/
+dist/

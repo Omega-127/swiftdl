@@ -3,72 +3,21 @@
 //                                  browser, waiting for Start / Later / Cancel
 //   download.html?id=<id>          live progress, then "Download complete"
 
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-const win = window.__TAURI__.window?.getCurrentWindow?.();
-const LogicalSize = window.__TAURI__.dpi?.LogicalSize;
+import "./styles.css";
+import "./download.css";
+import { invoke, listen, currentWindow, LogicalSize, $ } from "./api";
+import type { Item, Incoming, Header, MediaInfo, TorrentInfo, AddRequest, ProbeInfo, Settings, Quality } from "./api";
+import { icon, CATS, catOf, bytes, speed, dur, when, esc, host, catInfo } from "./util";
 
-// ---------- helpers ----------
-const P = {
-  check: '<path d="m5.5 12.5 4 4 9-9"/>',
-  alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v5M12 16h.01"/>',
-  pause: '<path d="M9 6v12M15 6v12"/>',
-  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
-  folder: '<path d="M3.5 7.5A2 2 0 0 1 5.5 5.5H9l2 2h7.5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
-  open: '<path d="M14 4.5h5.5V10M19.5 4.5 11 13M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 18V8a1.5 1.5 0 0 1 1.5-1.5h4"/>',
-  retry: '<path d="M4.5 12a7.5 7.5 0 0 1 13.2-4.8L19.5 9M19.5 4.5V9H15M19.5 12a7.5 7.5 0 0 1-13.2 4.8L4.5 15M4.5 19.5V15H9"/>',
-  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/>',
-  chevDown: '<path d="m6 9.5 6 6 6-6"/>',
-  chevUp: '<path d="m6 14.5 6-6 6 6"/>',
-  video: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 4.5v15M16.5 4.5v15M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4"/>',
-  music: '<path d="M9 17.5V6.3l10-1.8v11"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
-  app: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9h17"/><path d="M6.6 6.8h.01M9 6.8h.01" stroke-width="2.2"/>',
-  archive: '<path d="M12 3.3 20 7.4v9.2l-8 4.1-8-4.1V7.4z"/><path d="m4 7.4 8 4.1 8-4.1M12 11.5v9.2M8 5.3l8 4.1"/>',
-  doc: '<path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M9 12.5h6M9 16h6"/>',
-  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.7"/><path d="m20.5 15.5-4.5-4.5-9.5 8.5"/>',
-  file: '<path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5"/>',
-};
-const icon = (n) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${P[n] || P.file}</svg>`;
-const CATS = {
-  Video: { color: "#8b5cf6", icon: "video" }, Music: { color: "#ec4899", icon: "music" }, Programs: { color: "#3b82f6", icon: "app" },
-  Compressed: { color: "#f59e0b", icon: "archive" }, Documents: { color: "#10b981", icon: "doc" }, Images: { color: "#f97316", icon: "image" },
-  Other: { color: "#8b8f98", icon: "file" },
-};
-const catOf = (name) => {
-  const e = (/\.([a-z0-9]{1,5})$/i.exec(name || "") || [])[1]?.toLowerCase() || "";
-  if (/^(zip|rar|7z|tar|gz|tgz|xz|bz2|zst|iso|img)$/.test(e)) return "Compressed";
-  if (/^(pdf|docx?|xlsx?|pptx?|odt|txt|rtf|epub|csv|md)$/.test(e)) return "Documents";
-  if (/^(mp3|wav|flac|aac|ogg|m4a|opus|wma)$/.test(e)) return "Music";
-  if (/^(mp4|mkv|avi|mov|webm|flv|wmv|m4v|mpe?g|3gp|ts)$/.test(e)) return "Video";
-  if (/^(exe|msi|dmg|pkg|deb|rpm|apk|appimage|msix|bat|jar)$/.test(e)) return "Programs";
-  if (/^(jpe?g|png|gif|webp|svg|bmp|heic|avif)$/.test(e)) return "Images";
-  return "Other";
-};
-const glyph = (cat) => `<span class="glyph">${icon((CATS[cat] || CATS.Other).icon)}</span>`;
-const UNITS = ["B", "KB", "MB", "GB", "TB"];
-function bytes(n) {
-  if (n == null || !isFinite(n)) return "—";
-  let i = 0;
-  while (n >= 1024 && i < UNITS.length - 1) { n /= 1024; i++; }
-  return `${i === 0 ? Math.round(n) : n < 10 ? n.toFixed(2) : n < 100 ? n.toFixed(1) : Math.round(n)} ${UNITS[i]}`;
-}
-const speed = (b) => (b > 0 ? `${bytes(b)}/s` : "—");
-function dur(sec) {
-  if (!isFinite(sec) || sec <= 0) return "—";
-  sec = Math.ceil(sec);
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
-}
-function when(ms) {
+const win = currentWindow();
+
+const glyph = (cat: string, _name = "") => `<span class="glyph">${icon(catInfo(cat).icon)}</span>`;
+// Download windows show the full date for anything older than an hour.
+const whenFull = (ms: number | null) => {
   if (!ms) return "";
-  const mins = Math.round((Date.now() - ms) / 60000);
-  if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins}m ago`;
-  return new Date(ms).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-}
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const host = (url) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } };
-const $ = (id) => document.getElementById(id);
+  return Date.now() - ms < 3600_000 ? when(ms) : new Date(ms).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+};
+
 const view = $("view");
 
 // The window grows and shrinks to fit what it shows.
@@ -79,42 +28,42 @@ const fit = () => {
   win.setSize(new LogicalSize(552, Math.min(780, h)));
 };
 new ResizeObserver(fit).observe($("root"));
-const setTitle = (t) => { $("w-title").textContent = t; document.title = t; win?.setTitle(t); };
+const setTitle = (t: string) => { $("w-title").textContent = t; document.title = t; win?.setTitle(t); };
 
 $("w-min").onclick = () => win?.minimize();
 $("w-close").onclick = () => (win ? win.close() : window.close());
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("w-close").click(); });
-document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input")) e.preventDefault(); });
+document.addEventListener("contextmenu", (e) => { if (!(e.target as HTMLElement & HTMLInputElement).closest<HTMLElement>("input")) e.preventDefault(); });
 
 const params = new URLSearchParams(location.search);
 
 // Adds the download, or shows why it couldn't be added above the buttons
 // (a failed click must never just do nothing). Returns its id, or null.
-async function addDownload(req) {
-  view.querySelector(".add-err")?.remove();
+async function addDownload(req: AddRequest): Promise<number | null> {
+  view.querySelector<HTMLElement>(".add-err")?.remove();
   try {
     return await invoke("add_download", { req });
   } catch (e) {
-    view.querySelector(".d-foot")?.insertAdjacentHTML("beforebegin", `<p class="err add-err">Couldn't add the download: ${esc(String(e))}</p>`);
+    view.querySelector<HTMLElement>(".d-foot")?.insertAdjacentHTML("beforebegin", `<p class="err add-err">Couldn't add the download: ${esc(String(e))}</p>`);
     return null;
   }
 }
 
 // ---------- New download (caught from the browser) ----------
-async function confirmView(token) {
+async function confirmView(token: number) {
   setTitle("New download");
   const inc = await invoke("confirm_info", { token });
   if (!inc) { view.innerHTML = `<p class="muted">This download is no longer available.</p>`; return; }
   const { settings } = await invoke("get_state");
-  const headers = [];
+  const headers: Header[] = [];
   if (inc.cookies) headers.push(["Cookie", inc.cookies]);
   if (inc.referrer) headers.push(["Referer", inc.referrer]);
   if (inc.userAgent) headers.push(["User-Agent", inc.userAgent]);
-  let dir = settings.downloadDir, dirTouched = false, info = null;
+  let dir = settings.downloadDir, dirTouched = false, info: ProbeInfo | null = null;
   if (await invoke("is_media_url", { url: inc.url })) return mediaView(token, inc, settings, headers);
   if (await invoke("is_torrent_url", { url: inc.url, filename: inc.filename || null })) return torrentView(token, inc, settings, headers);
 
-  const dirFor = (cat) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
+  const dirFor = (cat: string) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
   view.innerHTML = `
     <div class="d-head"><span id="c-tile">${glyph("Other")}</span><div class="d-name"><input id="c-name" spellcheck="false" placeholder="Getting file details…"><div class="d-sub"><span class="st">${esc(host(inc.url))}</span></div></div></div>
     <div class="kv">
@@ -129,16 +78,16 @@ async function confirmView(token) {
       <button class="btn" id="c-cancel">Cancel</button>
       <button class="btn primary" id="c-start" disabled>Start download</button>
     </div>`;
-  const setDir = (d) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
+  const setDir = (d: string) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
   setDir(dir);
   $("c-start").focus();
 
   try {
     info = await invoke("probe_url", { url: inc.url, headers });
-    const suggested = /\.[a-z0-9]{2,5}$/i.test(inc.filename || "") ? inc.filename.split(/[\\/]/).pop() : "";
+    const suggested = /\.[a-z0-9]{2,5}$/i.test(inc.filename || "") ? inc.filename!.split(/[\\/]/).pop() : "";
     $("c-name").value = suggested || info.filename;
     $("c-cat").value = info.category;
-    $("c-tile").innerHTML = glyph(info.category);
+    $("c-tile").innerHTML = glyph(info.category, $("c-name").value);
     setDir(info.dir);
     $("c-size").innerHTML = `<span>${info.size != null ? bytes(info.size) : "Unknown size"}</span><span class="muted">${info.resumable ? `Resumable · ${settings.connections} connections` : "Can't resume · 1 connection"}</span>`;
     $("c-start").disabled = false;
@@ -146,10 +95,10 @@ async function confirmView(token) {
     $("c-name").value = inc.filename || "download";
     $("c-size").innerHTML = `<span class="err">Couldn't reach the file: ${esc(String(e))}</span>`;
   }
-  $("c-cat").onchange = () => { $("c-tile").innerHTML = glyph($("c-cat").value); if (!dirTouched) setDir(dirFor($("c-cat").value)); };
+  $("c-cat").onchange = () => { $("c-tile").innerHTML = glyph($("c-cat").value, $("c-name").value); if (!dirTouched) setDir(dirFor($("c-cat").value)); };
   $("c-browse").onclick = async () => { const d = await invoke("pick_folder", { start: dir }); if (d) { setDir(d); dirTouched = true; } };
   $("c-cancel").onclick = () => { invoke("forget_confirm", { token }); $("w-close").click(); };
-  const add = async (start) => {
+  const add = async (start: boolean) => {
     const filename = $("c-name").value.trim();
     if (!filename) return;
     const id = await addDownload({ url: inc.url, filename, dir, headers, start, window: win?.label });
@@ -161,16 +110,16 @@ async function confirmView(token) {
   };
   $("c-later").onclick = () => add(false);
   $("c-start").onclick = () => add(true);
-  document.addEventListener("keydown", (e) => { if (e.key === "Enter" && !$("c-start").disabled && !e.target.matches("select")) { e.preventDefault(); $("c-start").click(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Enter" && !$("c-start").disabled && !(e.target as HTMLElement & HTMLInputElement).matches("select")) { e.preventDefault(); $("c-start").click(); } });
 }
 
 // ---------- New download from a video site (YouTube and others) ----------
 // These go through yt-dlp: the page is probed for its qualities, and the
 // chosen one becomes the download's format.
-const safeName = (s) => s.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, 150) || "video";
-async function mediaView(token, inc, settings, headers) {
-  let dir = settings.downloadDir, dirTouched = false, info = null;
-  const dirFor = (cat) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
+const safeName = (s: string) => s.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, 150) || "video";
+async function mediaView(token: number, inc: Incoming, settings: Settings, headers: Header[]) {
+  let dir = settings.downloadDir, dirTouched = false, info: MediaInfo | null = null;
+  const dirFor = (cat: string) => (settings.sortIntoCategories && cat !== "Other" ? `${settings.downloadDir}\\${cat}` : settings.downloadDir);
   view.innerHTML = `
     <div class="d-head"><span id="c-tile">${glyph("Video")}</span><div class="d-name"><input id="c-name" spellcheck="false" placeholder="Getting video details…"><div class="d-sub"><span class="st">${esc(host(inc.url))}</span></div></div></div>
     <div class="kv">
@@ -185,14 +134,14 @@ async function mediaView(token, inc, settings, headers) {
       <button class="btn" id="c-cancel">Cancel</button>
       <button class="btn primary" id="c-start" disabled>Start download</button>
     </div>`;
-  const setDir = (d) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
+  const setDir = (d: string) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
   setDir(dirFor("Video"));
   const slow = setTimeout(() => { $("c-first").hidden = false; }, 4000);
-  const quality = () => info.qualities[Number($("c-qs").value) || 0];
+  const quality = (): Quality => info!.qualities[Number($("c-qs").value) || 0];
   const applyQuality = () => {
     const q = quality(), cat = q.ext === "mp4" || q.ext === "webm" ? "Video" : "Music";
     $("c-name").value = $("c-name").value.replace(/\.[a-z0-9]{2,4}$/i, "") + `.${q.ext}`;
-    $("c-tile").innerHTML = glyph(cat);
+    $("c-tile").innerHTML = glyph(cat, $("c-name").value);
     if (!dirTouched) setDir(dirFor(cat));
   };
   try {
@@ -216,7 +165,7 @@ async function mediaView(token, inc, settings, headers) {
   }
   $("c-browse").onclick = async () => { const d = await invoke("pick_folder", { start: dir }); if (d) { setDir(d); dirTouched = true; } };
   $("c-cancel").onclick = () => { invoke("forget_confirm", { token }); $("w-close").click(); };
-  const add = async (start) => {
+  const add = async (start: boolean) => {
     const filename = safeName($("c-name").value);
     if (!filename || !info) return;
     const q = quality();
@@ -229,13 +178,13 @@ async function mediaView(token, inc, settings, headers) {
   };
   $("c-later").onclick = () => add(false);
   $("c-start").onclick = () => add(true);
-  document.addEventListener("keydown", (e) => { if (e.key === "Enter" && !$("c-start").disabled && !e.target.matches("select")) { e.preventDefault(); $("c-start").click(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Enter" && !$("c-start").disabled && !(e.target as HTMLElement & HTMLInputElement).matches("select")) { e.preventDefault(); $("c-start").click(); } });
 }
 
 // ---------- New download from a torrent or magnet link ----------
 // The torrent is read for its files; the user picks which to download.
-async function torrentView(token, inc, settings, headers) {
-  let dir = settings.downloadDir, info = null;
+async function torrentView(token: number, inc: Incoming, settings: Settings, headers: Header[]) {
+  let dir = settings.downloadDir, info: TorrentInfo | null = null;
   const magnet = inc.url.startsWith("magnet:");
   view.innerHTML = `
     <div class="d-head">${glyph("Compressed")}<div class="d-name"><input id="c-name" spellcheck="false" placeholder="${magnet ? "Asking peers for the details…" : "Reading the torrent…"}" readonly><div class="d-sub"><span class="st">${magnet ? "Magnet link" : "Torrent"}</span></div></div></div>
@@ -250,14 +199,14 @@ async function torrentView(token, inc, settings, headers) {
       <button class="btn" id="c-cancel">Cancel</button>
       <button class="btn primary" id="c-start" disabled>Start download</button>
     </div>`;
-  const setDir = (d) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
+  const setDir = (d: string) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
   setDir(dir);
-  const chosen = () => [...view.querySelectorAll(".t-file input[data-i]:checked")].map((c) => Number(c.dataset.i));
+  const chosen = (): number[] => [...view.querySelectorAll<HTMLInputElement>(".t-file input[data-i]:checked")].map((c) => Number(c.dataset.i));
   const update = () => {
-    const sel = chosen(), size = sel.reduce((a, i) => a + info.files[i].size, 0);
-    $("t-sel").textContent = `${sel.length} of ${info.files.length} file${info.files.length === 1 ? "" : "s"} · ${bytes(size)}`;
+    const sel = chosen(), size = sel.reduce((a, i) => a + info!.files[i].size, 0);
+    $("t-sel").textContent = `${sel.length} of ${info!.files.length} file${info!.files.length === 1 ? "" : "s"} · ${bytes(size)}`;
     $("c-start").disabled = $("c-later").disabled = sel.length === 0;
-    const all = $("t-all"); if (all) all.checked = sel.length === info.files.length;
+    const all = $("t-all"); if (all) all.checked = sel.length === info!.files.length;
   };
   try {
     info = await invoke("probe_torrent", { url: inc.url, headers });
@@ -266,7 +215,7 @@ async function torrentView(token, inc, settings, headers) {
     $("t-files").innerHTML = (many ? `<label class="t-file t-allrow"><input type="checkbox" id="t-all" checked><span>All files</span><span class="muted">${bytes(info.size)}</span></label>` : "") +
       info.files.map((f, i) => `<label class="t-file"><input type="checkbox" data-i="${i}" checked><span title="${esc(f.path)}">${esc(f.path)}</span><span class="muted">${bytes(f.size)}</span></label>`).join("");
     $("t-files").addEventListener("change", (e) => {
-      if (e.target.id === "t-all") view.querySelectorAll(".t-file input[data-i]").forEach((c) => (c.checked = e.target.checked));
+      if ((e.target as HTMLElement & HTMLInputElement).id === "t-all") view.querySelectorAll<HTMLInputElement>(".t-file input[data-i]").forEach((c) => (c.checked = (e.target as HTMLElement & HTMLInputElement).checked));
       update();
     });
     update();
@@ -276,12 +225,12 @@ async function torrentView(token, inc, settings, headers) {
   }
   $("c-browse").onclick = async () => { const d = await invoke("pick_folder", { start: dir }); if (d) setDir(d); };
   $("c-cancel").onclick = () => { invoke("forget_confirm", { token }); $("w-close").click(); };
-  const add = async (start) => {
+  const add = async (start: boolean) => {
     if (!info) return;
     const sel = chosen();
     if (!sel.length) return;
     const files = sel.length === info.files.length ? [] : sel;
-    const size = sel.reduce((a, i) => a + info.files[i].size, 0);
+    const size = sel.reduce((a, i) => a + info!.files[i].size, 0);
     const id = await addDownload({ url: inc.url, filename: info.name, dir, headers, start, window: win?.label, size, torrentFiles: files });
     if (id == null) return;
     invoke("forget_confirm", { token });
@@ -294,8 +243,8 @@ async function torrentView(token, inc, settings, headers) {
 }
 
 // ---------- progress / complete ----------
-let current = null, details = false, armedTimer = 0, unlisten = null;
-async function progressView(id) {
+let current: Item | null = null, details = false, armedTimer = 0, unlisten: (() => void) | null = null;
+async function progressView(id: number) {
   current = await invoke("get_item", { id });
   render();
   unlisten?.();
@@ -332,7 +281,7 @@ function render() {
       error: `<button class="btn" data-a="close">Close</button><button class="btn primary" data-a="resume">Retry</button>`,
     }[state];
     view.innerHTML = `
-      <div class="d-head">${glyph(cat)}<div class="d-name"><b title="${esc(it.filename)}">${esc(it.filename)}</b><div class="d-sub" id="p-sub"></div></div></div>
+      <div class="d-head">${glyph(cat, it.filename)}<div class="d-name"><b title="${esc(it.filename)}">${esc(it.filename)}</b><div class="d-sub" id="p-sub"></div></div></div>
       <div class="p-line"><div class="p-bar" id="p-bar"><i></i></div><span class="p-pct" id="p-pct"></span></div>
       <div class="p-meta"><span id="p-left"></span><span id="p-right"></span></div>
       <div class="kv" id="p-kv"></div>
@@ -355,13 +304,13 @@ function render() {
   $("p-sub").innerHTML = `<span class="st ${state === "error" ? "err" : ""}" title="${esc(status[0])}">${esc(status[0])}</span><span>·</span><span>${esc(host(it.url))}</span>`;
   $("p-pct").textContent = it.size || state === "done" ? `${Math.floor(pct)}%` : "";
   $("p-left").textContent = state === "done" ? bytes(it.size) : it.size ? `${bytes(it.downloaded)} of ${bytes(it.size)}` : bytes(it.downloaded);
-  $("p-right").textContent = state === "run" ? `${speed(it.speed)} · ${dur(eta)} left` : state === "done" ? when(it.completedAt) : "";
+  $("p-right").textContent = state === "run" ? `${speed(it.speed)} · ${dur(eta)} left` : state === "done" ? whenFull(it.completedAt) : "";
   const bar = $("p-bar");
   bar.className = `p-bar ${state} ${!it.size && state === "run" ? "indet" : ""}`;
-  bar.firstElementChild.style.width = `${pct}%`;
-  const row = (k, v, cls = "") => `<span class="k">${k}</span><span class="v"><span class="${cls}" title="${esc(v)}">${esc(v)}</span></span>`;
+  (bar.firstElementChild as HTMLElement).style.width = `${pct}%`;
+  const row = (k: string, v: string, cls = "") => `<span class="k">${k}</span><span class="v"><span class="${cls}" title="${esc(v)}">${esc(v)}</span></span>`;
   const kv = row("Location", dir, "path") +
-    (state === "done" ? "" : torrent ? row("Files", it.torrentFiles.length ? `${it.torrentFiles.length} selected` : "All") : media ? row("Quality", qualityLabel(it.format)) : row("Resume", it.resumable ? "Supported" : "Not supported by this server")) +
+    (state === "done" ? "" : torrent ? row("Files", it.torrentFiles!.length ? `${it.torrentFiles!.length} selected` : "All") : media ? row("Quality", qualityLabel(it.format)) : row("Resume", it.resumable ? "Supported" : "Not supported by this server")) +
     row("Address", it.url);
   if ($("p-kv").innerHTML !== kv) $("p-kv").innerHTML = kv;
 
@@ -377,10 +326,10 @@ function render() {
       `<span class="slot" style="left:calc(${(s / size) * 100}% + 1px);width:calc(${((e - s) / size) * 100}% - 2px)"><i style="width:${((p - s) / Math.max(1, e - s)) * 100}%"></i></span>`).join("");
     if (lanes.children.length !== segs.length) lanes.innerHTML = html;
     else segs.forEach(([s, p, e], i) => {
-      const slot = lanes.children[i];
+      const slot = lanes.children[i] as HTMLElement;
       slot.style.left = `calc(${(s / size) * 100}% + 1px)`;
       slot.style.width = `calc(${((e - s) / size) * 100}% - 2px)`;
-      slot.firstElementChild.style.width = `${((p - s) / Math.max(1, e - s)) * 100}%`;
+      (slot.firstElementChild as HTMLElement).style.width = `${((p - s) / Math.max(1, e - s)) * 100}%`;
     });
     $("p-rows").innerHTML = segs.map(([s, p, e], n) => {
       const done = p >= e, frac = (p - s) / Math.max(1, e - s);
@@ -389,13 +338,13 @@ function render() {
   }
 }
 
-function qualityLabel(format) {
+function qualityLabel(format: string | null) {
   const h = /height=(\d+)/.exec(format || "");
   return h ? `${h[1]}p` : /^ba/.test(format || "") ? "Audio only" : "Best available";
 }
 
 view.addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-a]");
+  const b = (e.target as HTMLElement & HTMLInputElement).closest<HTMLElement>("[data-a]");
   if (!b || !current) return;
   const id = current.id;
   switch (b.dataset.a) {
@@ -410,7 +359,7 @@ view.addEventListener("click", async (e) => {
       if (!b.classList.contains("armed")) {
         b.classList.add("armed"); b.textContent = "Cancel download?";
         clearTimeout(armedTimer);
-        armedTimer = setTimeout(() => { b.classList.remove("armed"); b.textContent = "Cancel"; }, 3000);
+        armedTimer = window.setTimeout(() => { b.classList.remove("armed"); b.textContent = "Cancel"; }, 3000);
       } else {
         await invoke("remove", { ids: [id], deleteFiles: false });
         $("w-close").click();

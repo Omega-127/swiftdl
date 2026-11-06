@@ -220,7 +220,7 @@ cd app/src-tauri && cargo tauri dev
 | [`extension`](extension) | The Chromium extension (Manifest V3) |
 | [`tools`](tools) | A throttled test server and a native-messaging test client |
 
-Working on the interface only? Serve `app/ui` with any static server (`python -m http.server -d app/ui`) and open it in a browser. A simulated backend fills it with downloads, so no Rust build is needed.
+Working on the interface only? It is TypeScript, built with Vite: run `npm install` and `npm run dev` in `app/`, then open http://localhost:5179. A simulated backend fills it with downloads, so no Rust build is needed. Run `npm run build` once before building the app with Cargo.
 
 ## Contributing
 

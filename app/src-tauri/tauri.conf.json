@@ -4,7 +4,9 @@
   "version": "0.3.1",
   "identifier": "com.swiftdl.app",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5179",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": ".." }
   },
   "app": {
     "withGlobalTauri": true,
