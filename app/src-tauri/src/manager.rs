@@ -466,8 +466,10 @@ impl DownloadManager {
             tauri::async_runtime::spawn(async move {
                 let result = match kind {
                     Kind::Media(format) => {
-                        let cookies = req.headers.get("cookie").and_then(|v| v.to_str().ok()).map(str::to_string);
-                        let job = crate::media::Job { url: req.url.clone(), format, dest: req.dest.clone(), cookies };
+                        let headers = req.headers.iter()
+                            .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+                            .collect();
+                        let job = crate::media::Job { url: req.url.clone(), format, dest: req.dest.clone(), headers };
                         crate::media::run(&this.client, job, progress, note, cancel).await
                     }
                     Kind::Torrent(files) => {

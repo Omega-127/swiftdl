@@ -145,8 +145,12 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     if (!dirTouched) setDir(dirFor(cat));
   };
   try {
-    info = await invoke("probe_media", { url: inc.url, cookies: inc.cookies || null });
-    $("c-name").value = `${safeName(info.title)}.${info.qualities[0].ext}`;
+    info = await invoke("probe_media", { url: inc.url, headers });
+    // A stream's own title is just its playlist's name ("index", "master"),
+    // so use the page's title that came with it from the browser.
+    const stream = /\.(m3u8|mpd)(?:$|[?#])/i.test(inc.url);
+    const title = stream && inc.filename ? inc.filename.replace(/\.[a-z0-9]{2,4}$/i, "") : info.title;
+    $("c-name").value = `${safeName(title)}.${info.qualities[0].ext}`;
     $("c-q").innerHTML = `<select id="c-qs">${info.qualities.map((q, i) => `<option value="${i}">${esc(q.label)}${q.size ? ` · ${bytes(q.size)}` : ""}</option>`).join("")}</select>`;
     // Default to the best quality up to 1080p: 4K files are huge, and
     // they're one click away.

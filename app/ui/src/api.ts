@@ -76,7 +76,7 @@ type Browser = { browser: string };
 export interface Commands {
   get_state: [void, AppState];
   probe_url: [{ url: string; headers: Header[] }, ProbeInfo];
-  probe_media: [{ url: string; cookies: string | null }, MediaInfo];
+  probe_media: [{ url: string; headers: Header[] }, MediaInfo];
   is_media_url: [{ url: string }, boolean];
   is_torrent_url: [{ url: string; filename: string | null }, boolean];
   probe_torrent: [{ url: string; headers: Header[] }, TorrentInfo];

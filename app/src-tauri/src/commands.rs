@@ -230,8 +230,8 @@ pub fn is_media_url(url: String) -> bool {
 }
 
 #[tauri::command]
-pub async fn probe_media(m: Mgr<'_>, url: String, cookies: Option<String>) -> Result<crate::media::MediaInfo, String> {
-    crate::media::probe(m.client(), url.trim(), cookies).await.map_err(|e| format!("{e:#}"))
+pub async fn probe_media(m: Mgr<'_>, url: String, headers: Vec<(String, String)>) -> Result<crate::media::MediaInfo, String> {
+    crate::media::probe(m.client(), url.trim(), headers).await.map_err(|e| format!("{e:#}"))
 }
 
 /// A video-site link pasted into the main window: choose its quality in a

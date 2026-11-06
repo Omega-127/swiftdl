@@ -132,7 +132,9 @@
     const src = video?.currentSrc;
     if (src && /^https?:/i.test(src) && !items.some((m) => m.url === src)) items.unshift({ url: src, kind: "file", mime: "video/mp4", size: 0 });
     const files = items.filter((m) => m.kind === "file");
-    const streams = items.filter((m) => m.kind !== "file");
+    // A player loads its main playlist first, then one per quality: the
+    // oldest stream is the main one, which lets SwiftDL offer every quality.
+    const stream = items.filter((m) => m.kind !== "file").at(-1);
     const name = title();
     let html = "";
     if (files.length) {
@@ -143,12 +145,10 @@
         return `<button class="item" data-url="${encodeURI(m.url).replace(/"/g, "%22")}" data-name="${name.replace(/"/g, "'")}.${ext}"><span class="tag">${ext.toUpperCase()}</span><span class="meta"><b>${kind}${m.size ? ` · ${bytes(m.size)}` : ""}</b><span>${new URL(m.url).hostname}</span></span></button>`;
       }).join("");
     }
-    if (streams.length) {
-      html += `<div class="head">Streams</div>` + streams.slice(0, 3).map((m) =>
-        `<button class="item" disabled><span class="tag stream">${m.kind.toUpperCase()}</span><span class="meta"><b>Streaming video</b><span>Not supported yet</span></span></button>`).join("");
+    if (stream) {
+      html += `<div class="head">Stream</div><button class="item" data-url="${encodeURI(stream.url).replace(/"/g, "%22")}" data-name="${name.replace(/"/g, "'")}.mp4"><span class="tag stream">${stream.kind.toUpperCase()}</span><span class="meta"><b>This video</b><span>Choose the quality in SwiftDL</span></span></button>`;
     }
-    if (!files.length && !streams.length) html = `<div class="msg">No downloadable file found yet. Play the video for a moment, then try again.</div>`;
-    else if (!files.length) html += `<div class="msg">This video streams in pieces (HLS/DASH), which SwiftDL can't download yet.</div>`;
+    if (!files.length && !stream) html = `<div class="msg">No downloadable file found yet. Play the video for a moment, then try again.</div>`;
     panel.innerHTML = html;
   }
 

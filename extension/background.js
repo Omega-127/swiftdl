@@ -143,9 +143,11 @@ async function mediaFor(tabId) {
 
 async function refreshBadge(tabId) {
   if (tabId == null) { chrome.action.setBadgeText({ text: "" }); return; }
-  const files = (await mediaFor(tabId)).filter((m) => m.kind === "file").length;
+  // Files, plus one for a stream (its playlists are one video).
+  const media = await mediaFor(tabId);
+  const count = media.filter((m) => m.kind === "file").length + (media.some((m) => m.kind !== "file") ? 1 : 0);
   chrome.action.setBadgeBackgroundColor({ color: "#0a84ff", tabId });
-  chrome.action.setBadgeText({ text: files ? String(files) : "", tabId });
+  chrome.action.setBadgeText({ text: count ? String(count) : "", tabId });
 }
 
 // A new page in the tab starts a fresh list.

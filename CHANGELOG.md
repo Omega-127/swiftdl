@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **HLS and DASH streams** (`.m3u8` and `.mpd`). Videos that stream in
+  pieces now download: the extension's video button and popup offer the
+  stream, the New download window lists its qualities, and the pieces are
+  joined into one MP4. Pasting a stream link into New download works too.
+  The page's cookies, referrer and user agent go along, since stream
+  servers often check them.
+
 ### Changed
 - **The interface is TypeScript.** `app/ui` is built by Vite in strict
   TypeScript, and every call to the backend is checked against the Rust

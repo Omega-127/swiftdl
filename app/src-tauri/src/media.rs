@@ -23,7 +23,17 @@ const SITES: &[&str] = &[
     "instagram.com", "tiktok.com", "facebook.com", "twitch.tv", "dailymotion.com", "soundcloud.com", "bilibili.com",
 ];
 
+/// A video stream: an HLS playlist (.m3u8) or a DASH manifest (.mpd). These
+/// come in many small pieces, so yt-dlp fetches them and ffmpeg joins them.
+pub fn is_stream_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+    path.starts_with("http") && (path.ends_with(".m3u8") || path.ends_with(".mpd"))
+}
+
 pub fn is_media_url(url: &str) -> bool {
+    if is_stream_url(url) {
+        return true;
+    }
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
@@ -191,6 +201,18 @@ fn command(program: &Path) -> Command {
     cmd
 }
 
+/// Passes the browser's headers on to yt-dlp. Stream servers often refuse
+/// requests without the page's cookies, referrer or user agent.
+fn add_headers(cmd: &mut Command, headers: &[(String, String)]) {
+    for (name, value) in headers.iter().filter(|(_, v)| !v.is_empty()) {
+        match name.to_ascii_lowercase().as_str() {
+            "referer" => { cmd.arg("--referer").arg(value); }
+            "user-agent" => { cmd.arg("--user-agent").arg(value); }
+            _ => { cmd.arg("--add-headers").arg(format!("{name}:{value}")); }
+        }
+    }
+}
+
 /// A yt-dlp command, told which JavaScript runtime to use. Current yt-dlp
 /// needs one for full YouTube extraction; without it some formats go missing.
 fn ytdlp_command(ytdlp: &Path) -> Command {
@@ -236,7 +258,7 @@ pub struct MediaInfo {
 }
 
 /// Asks yt-dlp what the page offers, as a short list of qualities.
-pub async fn probe(client: &Client, url: &str, cookies: Option<String>) -> Result<MediaInfo> {
+pub async fn probe(client: &Client, url: &str, headers: Vec<(String, String)>) -> Result<MediaInfo> {
     let note: Note = Arc::default();
     let tools = ensure_tools(client, &note, false).await?;
     let url = url.to_string();
@@ -244,9 +266,7 @@ pub async fn probe(client: &Client, url: &str, cookies: Option<String>) -> Resul
     let out = tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = ytdlp_command(&tools.ytdlp);
         cmd.args(["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "20"]);
-        if let Some(c) = cookies.filter(|c| !c.is_empty()) {
-            cmd.arg("--add-headers").arg(format!("Cookie:{c}"));
-        }
+        add_headers(&mut cmd, &headers);
         cmd.arg(&url).output()
     })
     .await??;
@@ -329,14 +349,17 @@ pub struct Job {
     pub url: String,
     pub format: String,
     pub dest: PathBuf,
-    pub cookies: Option<String>,
+    /// The browser's Cookie, Referer and User-Agent, when it came from one.
+    pub headers: Vec<(String, String)>,
 }
 
 /// Runs yt-dlp for one download, reporting into `progress` and `note`.
 /// Cancelling stops yt-dlp; its partial files stay, so running the same job
 /// again continues where it left off.
 pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note, cancel: CancellationToken) -> Result<Outcome> {
-    let merges = job.format.contains('+');
+    // Streams arrive in pieces that ffmpeg turns into one MP4.
+    let stream = is_stream_url(&job.url);
+    let merges = job.format.contains('+') || stream;
     let tools = ensure_tools(client, &note, merges).await?;
     if merges && tools.ffmpeg.is_none() {
         bail!("Joining video and audio needs ffmpeg. Install it (brew install ffmpeg, or sudo apt install ffmpeg) and try again.");
@@ -355,12 +378,15 @@ pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note,
     if merges {
         cmd.args(["--merge-output-format", "mp4"]);
     }
+    if stream {
+        // yt-dlp's own HLS downloader fetches -N pieces at once; ffmpeg's
+        // would take them one by one.
+        cmd.arg("--hls-prefer-native");
+    }
     if let Some(dir) = &tools.ffmpeg {
         cmd.arg("--ffmpeg-location").arg(dir);
     }
-    if let Some(c) = job.cookies.as_ref().filter(|c| !c.is_empty()) {
-        cmd.arg("--add-headers").arg(format!("Cookie:{c}"));
-    }
+    add_headers(&mut cmd, &job.headers);
     // yt-dlp treats % in the output name as a template field.
     cmd.arg("-o").arg(job.dest.to_string_lossy().replace('%', "%%")).arg(&job.url);
     let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("couldn't start yt-dlp")?;
@@ -474,6 +500,17 @@ pub fn cleanup(dest: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_streams() {
+        assert!(is_stream_url("https://cdn.example.com/live/master.m3u8"));
+        assert!(is_stream_url("https://cdn.example.com/v/index.M3U8?token=abc#t=5"));
+        assert!(is_stream_url("https://cdn.example.com/dash/manifest.mpd"));
+        assert!(is_media_url("https://cdn.example.com/live/master.m3u8"));
+        assert!(!is_stream_url("https://cdn.example.com/video.mp4"));
+        assert!(!is_stream_url("https://cdn.example.com/page?file=master.m3u8"));
+        assert!(!is_stream_url("magnet:?xt=urn:btih:abc&dn=x.m3u8"));
+    }
 
     #[test]
     fn recognises_video_sites() {
