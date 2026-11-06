@@ -25,6 +25,11 @@ uses [Semantic Versioning](https://semver.org/).
   Settings → About → Open log, to attach to a bug report. (#4)
 
 ### Fixed
+- **"Couldn't reach SwiftDL" from the video button** when the app was
+  closed. The browser starts SwiftDL for each download, and a start that
+  failed once is now retried. The message also says what really went wrong:
+  after the extension is updated, pages that were already open must be
+  reloaded, and the button now says so instead of blaming the app.
 - **Pasting a YouTube or magnet link froze the app** on Windows: the New
   download window was created on the main thread, which deadlocks WebView2.
   Windows are now created on their own thread. (#4)

@@ -152,13 +152,21 @@
     panel.innerHTML = html;
   }
 
+  // Say what actually went wrong. The commonest case isn't SwiftDL at all:
+  // the extension was updated or reloaded, which cuts off pages that were
+  // already open until they're reloaded.
+  function failure(error) {
+    const text = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+    if (/context invalidated|receiving end does not exist/i.test(error) || !chrome.runtime?.id) return "SwiftDL's extension was updated. Reload this page and try again.";
+    if (/host not found|not allowed/i.test(error)) return "SwiftDL isn't set up in this browser yet. Open the SwiftDL app once, then try again.";
+    return `SwiftDL couldn't take this download: ${text(error) || "no answer from the app"}.`;
+  }
+
   async function grab(url, filename) {
     panel.innerHTML = `<div class="msg">Sending to SwiftDL…</div>`;
     let res;
-    try { res = await chrome.runtime.sendMessage({ type: "grab", url: decodeURI(url), filename }); } catch (e) { res = { ok: false, error: String(e) }; }
-    panel.innerHTML = res?.ok
-      ? `<div class="msg ok">Sent to SwiftDL ✓</div>`
-      : `<div class="msg err">Couldn't reach SwiftDL. Make sure the app is installed and has been opened once.</div>`;
+    try { res = await chrome.runtime.sendMessage({ type: "grab", url: decodeURI(url), filename }); } catch (e) { res = { ok: false, error: String(e?.message || e) }; }
+    panel.innerHTML = res?.ok ? `<div class="msg ok">Sent to SwiftDL ✓</div>` : `<div class="msg err">${failure(res?.error || "")}</div>`;
     setTimeout(() => { setOpen(false); scheduleHide(); }, 1800);
   }
 

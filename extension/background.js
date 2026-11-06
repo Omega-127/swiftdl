@@ -42,7 +42,17 @@ async function sendToApp({ url, referrer, filename }) {
     cookies: await cookieHeader(url),
     userAgent: navigator.userAgent,
   };
-  const reply = await chrome.runtime.sendNativeMessage(HOST, message);
+  // The browser starts SwiftDL for this message even when the app is
+  // closed. A start that fails once (the computer is busy, an update is
+  // still being written) usually works a moment later, so try twice.
+  let reply;
+  try {
+    reply = await chrome.runtime.sendNativeMessage(HOST, message);
+  } catch (e) {
+    await log(`native host failed, retrying: ${e?.message || e}`);
+    await new Promise((r) => setTimeout(r, 800));
+    reply = await chrome.runtime.sendNativeMessage(HOST, message);
+  }
   if (!reply?.ok) throw new Error(reply?.error || "SwiftDL did not accept the download");
 }
 
