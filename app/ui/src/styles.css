@@ -38,7 +38,7 @@
   color-scheme: light;
 }
 /* Dark theme. Each window sets data-theme on <html>: "light" or "dark",
-   chosen in Settings or following the system (see theme.js). */
+   chosen in Settings or following the system (see theme.ts). */
 :root[data-theme="dark"] {
   --bg: #090a0c;
   --panel: #101114;
