@@ -9,6 +9,7 @@ mod media;
 mod native_host;
 mod settings;
 mod torrent;
+mod update;
 mod windows;
 
 use manager::DownloadManager;
@@ -131,6 +132,8 @@ fn main() {
             commands::confirm_info,
             commands::forget_confirm,
             commands::show_main,
+            commands::check_update,
+            commands::install_update,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {

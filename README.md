@@ -150,7 +150,9 @@ The SwiftDL extension works in **Chrome, Edge, Brave, Vivaldi and Firefox**:
 - Hold <kbd>Alt</kbd> while clicking a link to let the browser handle that download.
 - Can be turned off for a single site from its popup.
 
-**Install it:** the extension comes with SwiftDL, so there's nothing extra to download. In SwiftDL, click **Add the extension** (or go to **Settings → Browser**) and follow the four steps:
+**Firefox:** install it from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/swiftdl-integration/), or click **Add to Firefox** in SwiftDL's **Settings → Browser**.
+
+**Chrome, Edge, Brave and Vivaldi:** the extension comes with SwiftDL, so there's nothing extra to download. In SwiftDL, click **Add the extension** (or go to **Settings → Browser**) and follow the four steps:
 
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode**.

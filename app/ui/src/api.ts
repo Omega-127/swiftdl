@@ -60,6 +60,7 @@ export interface Incoming {
 }
 
 export interface AppState { items: Item[]; settings: Settings; pending: Incoming[]; version: string }
+export interface UpdateInfo { version: string; page: string; asset: string | null }
 export interface ProbeInfo { filename: string; size: number | null; resumable: boolean; category: string; dir: string }
 export interface BrowserStatus { id: string; name: string; installed: boolean; autoOffer: boolean; lastSeen?: number | null }
 export interface IntegrationStatus { browsers: BrowserStatus[]; lastSeen: number | null; storeUrl: string; storeAvailable: boolean }
@@ -101,6 +102,8 @@ export interface Commands {
   confirm_info: [{ token: number }, Incoming | null];
   forget_confirm: [{ token: number }, void];
   show_main: [void, void];
+  check_update: [void, UpdateInfo | null];
+  install_update: [{ url: string }, void];
 }
 export interface Events {
   downloads: Item[];

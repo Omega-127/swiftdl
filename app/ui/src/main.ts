@@ -3,7 +3,7 @@
 
 import "./styles.css";
 import { invoke, listen, currentWindow, $ } from "./api";
-import type { Item, Settings, IntegrationStatus, BrowserStatus, Incoming, ProbeInfo, Header, Status, Commands } from "./api";
+import type { Item, Settings, IntegrationStatus, BrowserStatus, Incoming, ProbeInfo, Header, Status, Commands, UpdateInfo } from "./api";
 import { icon, CATS, parts, bytes, speed, dur, when, esc, host } from "./util";
 
 const appWindow = currentWindow();
@@ -48,10 +48,12 @@ const STATUS: Record<Status, string> = { downloading: "Downloading", queued: "Qu
 const HISTORY = 120;
 const LIMITS = [0, 256, 1024, 5120, 10240];
 interface State {
+  version: string;
   items: Item[]; settings: Settings | null; view: string; search: string; selected: number | null; pending: Incoming[];
   speedHist: Map<number, number[]>; totalHist: number[]; typesOpen: boolean; integration: IntegrationStatus | null;
 }
 const state: State = {
+  version: "",
   items: [], settings: null, view: "all", search: "", selected: null, pending: [],
   speedHist: new Map(), totalHist: [], typesOpen: true, integration: null,
 };
@@ -348,7 +350,8 @@ const EXT_PAGE: Record<string, string> = { edge: "edge://extensions", brave: "br
 let guidePoll = 0;
 async function openExtensionGuide(browserId?: string) {
   const i = state.integration;
-  if (i?.storeAvailable && browserId && browserId !== "firefox") return openStore(browserId);
+  // Firefox has its listing on Firefox Add-ons; Chromium browsers wait for the Chrome Web Store.
+  if (browserId === "firefox" || (i?.storeAvailable && browserId)) return openStore(browserId);
   const dir = await invoke("extension_dir").catch(() => null);
   const ff = browserId === "firefox";
   const path = (dir || "%LOCALAPPDATA%\\SwiftDL\\extension") + (ff ? "-firefox" : "");
@@ -387,6 +390,7 @@ $("ext-browsers").addEventListener("click", (e) => { const b = target(e).closest
 $("ext-copy").innerHTML = icon("copy");
 $("ext-copy").onclick = () => copy($("ext-path").textContent || "", "Folder path copied");
 $("ext-open").onclick = () => call("open_extension_folder");
+$("ext-ff-store").onclick = (e) => { e.preventDefault(); openStore("firefox"); };
 $("onboard").addEventListener("click", async (e) => {
   if (target(e).closest<HTMLElement>("[data-guide]")) return openExtensionGuide();
   const s = target(e).closest<HTMLElement>("[data-store]");
@@ -398,7 +402,7 @@ $("onboard").addEventListener("click", async (e) => {
 });
 async function openStore(browser: string) {
   await call("open_store", { browser });
-  toast("Opened the extension page. Click “Add to browser” there.", "ok");
+  toast(browser === "firefox" ? "Opened Firefox Add-ons. Click “Add to Firefox” there." : "Opened the extension page. Click “Add to browser” there.", "ok");
 }
 function renderBrowserPanel() {
   const i = state.integration;
@@ -886,17 +890,52 @@ function ingest(items: Item[]) {
   if (state.totalHist.length > HISTORY) state.totalHist.shift();
   render();
 }
+// Updates: check a few seconds after start, then twice a day. A dismissed
+// version stays quiet; the next one shows again.
+let update: UpdateInfo | null = null;
+const SKIP_KEY = "swiftdl.skipUpdate";
+function renderUpdate(busy = false) {
+  const card = $("update");
+  let skipped = "";
+  try { skipped = localStorage.getItem(SKIP_KEY) || ""; } catch {}
+  card.hidden = !update || update.version === skipped;
+  if (card.hidden || !update) return;
+  const install = update.asset ? (update.asset.endsWith(".exe") ? "Install and restart" : "Download") : "Get it";
+  card.innerHTML = `<span class="ob-icon">${icon("download")}</span>
+    <span class="ob-text"><b>SwiftDL ${esc(update.version)} is available</b>${busy ? "Downloading the update…" : "You have " + esc(state.version)}</span>
+    <span class="ob-actions">${busy ? "" : `<button class="link-btn" data-notes>What's new</button><button class="link-btn" data-install>${install}</button><button class="sq-btn" data-skip title="Skip this version">${icon("x")}</button>`}</span>`;
+}
+async function checkUpdate() {
+  try { update = await invoke("check_update"); } catch { return; }
+  renderUpdate();
+}
+$("update").addEventListener("click", async (e) => {
+  const b = (e.target as HTMLElement).closest("button");
+  if (!b || !update) return;
+  if (b.hasAttribute("data-notes")) invoke("open_url", { url: update.page });
+  else if (b.hasAttribute("data-skip")) {
+    try { localStorage.setItem(SKIP_KEY, update.version); } catch {}
+    renderUpdate();
+  } else if (b.hasAttribute("data-install")) {
+    renderUpdate(true);
+    try { await invoke("install_update", { url: update.asset || update.page }); renderUpdate(); }
+    catch (err) { renderUpdate(); toast(`Update failed: ${err}`); }
+  }
+});
 async function boot() {
   hydrate();
   const s = await invoke("get_state");
   state.settings = s.settings;
   window.setTheme(s.settings.theme);
   state.pending = s.pending;
+  state.version = s.version;
   $("version").textContent = `Version ${s.version}`;
   ingest(s.items);
   nextPending();
   loadIntegration();
   setInterval(loadIntegration, 15000);
+  setTimeout(checkUpdate, 5000);
+  setInterval(checkUpdate, 12 * 60 * 60 * 1000);
   await listen("downloads", (e) => ingest(e.payload));
   await listen("incoming", () => invoke("get_state").then((s) => { state.pending.push(...s.pending); nextPending(); }));
   setInterval(() => {

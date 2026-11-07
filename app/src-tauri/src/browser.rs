@@ -32,6 +32,9 @@ pub const STORE_UPDATE_URL: &str = "https://clients2.google.com/service/update2/
 /// instead of offering store buttons that would lead nowhere.
 pub const STORE_PUBLISHED: bool = false;
 
+/// The add-on's listing on Firefox Add-ons (live since 0.3.0).
+pub const FIREFOX_STORE_URL: &str = "https://addons.mozilla.org/firefox/addon/swiftdl-integration/";
+
 pub fn store_url() -> String {
     format!("https://chromewebstore.google.com/detail/{}", EXTENSION_IDS[0])
 }
@@ -386,7 +389,8 @@ pub fn status() -> IntegrationStatus {
     }
 }
 
-/// Opens the extension's store page in a specific browser.
+/// Opens the extension's store page in a specific browser: Firefox Add-ons
+/// for Firefox, the Chrome Web Store for the rest.
 pub fn open_store_in(app: &AppHandle, browser: &str) -> Result<()> {
     use tauri_plugin_opener::OpenerExt;
     let exe = browser_exe(browser).ok_or_else(|| anyhow::anyhow!("{browser} isn't installed"))?;
@@ -394,7 +398,8 @@ pub fn open_store_in(app: &AppHandle, browser: &str) -> Result<()> {
     let with = exe.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     #[cfg(not(target_os = "macos"))]
     let with = exe.to_string_lossy().into_owned();
-    app.opener().open_url(store_url(), Some(with))?;
+    let url = if browser == "firefox" { FIREFOX_STORE_URL.to_string() } else { store_url() };
+    app.opener().open_url(url, Some(with))?;
     Ok(())
 }
 

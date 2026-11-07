@@ -13,6 +13,16 @@ uses [Semantic Versioning](https://semver.org/).
   joined into one MP4. Pasting a stream link into New download works too.
   The page's cookies, referrer and user agent go along, since stream
   servers often check them.
+- **Update notifications.** SwiftDL checks GitHub for a new release a few
+  seconds after it starts and twice a day. A banner shows the new version
+  with "What's new" and an install button: on Windows it downloads the
+  installer, closes SwiftDL, updates and reopens it; on macOS it downloads
+  the .dmg, and on Linux it opens the release page. A skipped version stays
+  quiet until the next one.
+- **SwiftDL Integration is on Firefox Add-ons**
+  (https://addons.mozilla.org/firefox/addon/swiftdl-integration/). Add to
+  Firefox in Settings → Browser now opens the listing instead of the
+  temporary-add-on steps.
 
 ### Changed
 - **The interface is TypeScript.** `app/ui` is built by Vite in strict

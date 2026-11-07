@@ -240,3 +240,28 @@ pub async fn probe_media(m: Mgr<'_>, url: String, headers: Vec<(String, String)>
 pub fn open_new_download(m: Mgr, url: String) {
     m.new_download_window(Incoming { url: url.trim().to_string(), filename: None, referrer: None, cookies: None, user_agent: None });
 }
+
+#[tauri::command]
+pub async fn check_update(m: Mgr<'_>) -> Result<Option<crate::update::Update>, String> {
+    crate::update::check(m.client()).await.map_err(|e| {
+        crate::log::line(&format!("update check failed: {e:#}"));
+        format!("{e:#}")
+    })
+}
+
+/// Installs a release: on Windows downloads and runs the installer, then quits
+/// so it can replace this app; elsewhere opens the download in the browser.
+#[tauri::command]
+pub async fn install_update(m: Mgr<'_>, url: String) -> Result<(), String> {
+    if cfg!(windows) && url.ends_with(".exe") {
+        crate::update::run_installer(m.client(), &url).await.map_err(|e| {
+            crate::log::line(&format!("update install failed: {e:#}"));
+            format!("{e:#}")
+        })?;
+        m.save();
+        m.app_handle().exit(0);
+        Ok(())
+    } else {
+        m.app_handle().opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    }
+}
