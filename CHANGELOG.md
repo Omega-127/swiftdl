@@ -6,6 +6,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-07
+
+### Fixed
+- YouTube downloads for signed-in browsers. The browser's YouTube cookies
+  made the quick lookup find no formats, so the download fell back to a slow,
+  single-connection yt-dlp run after 10-15 seconds. Quick lookups now go
+  without cookies; the lookup with a JavaScript runtime keeps them.
+- YouTube is looked up with the JavaScript runtime first, which solves its
+  speed checks; without that, its servers send the file at a crawl.
+
+### Changed
+- The video quality menu is one short row per quality with its size, and
+  fits without a scrollbar.
+
 ## [0.3.3] - 2026-11-07
 
 ### Added
@@ -226,7 +240,8 @@ uses [Semantic Versioning](https://semver.org/).
 - GitHub Actions for CI and tagged releases (Windows, macOS, Linux and the
   extension zip).
 
-[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.0...v0.3.1

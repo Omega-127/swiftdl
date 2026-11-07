@@ -242,6 +242,16 @@ fn add_headers(cmd: &mut Command, headers: &[(String, String)]) {
     }
 }
 
+/// The browser headers to give yt-dlp. On YouTube, a signed-in browser's
+/// cookies make yt-dlp use a client whose formats need a JavaScript runtime:
+/// without one it finds no formats at all ("Requested format is not
+/// available"). So the quick, runtime-free tries go without cookies; the retry
+/// with a runtime keeps them, for age-restricted and private videos.
+fn headers_for(url: &str, headers: &[(String, String)], with_js: bool) -> Vec<(String, String)> {
+    let drop_cookies = !with_js && youtube_id(url).is_some();
+    headers.iter().filter(|(k, _)| !(drop_cookies && k.eq_ignore_ascii_case("cookie"))).cloned().collect()
+}
+
 /// A yt-dlp command, told which JavaScript runtime to use. Current yt-dlp
 /// needs one for full YouTube extraction; without it some formats go missing.
 fn ytdlp_command(ytdlp: &Path) -> Command {
@@ -325,7 +335,7 @@ async fn ytdlp_json(ytdlp: PathBuf, url: String, headers: Vec<(String, String)>,
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<std::process::Output> {
         let mut cmd = if with_js { ytdlp_command(&ytdlp) } else { command(&ytdlp) };
         cmd.args(["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "20"]);
-        add_headers(&mut cmd, &headers);
+        add_headers(&mut cmd, &headers_for(&url, &headers, with_js));
         let mut child = cmd.arg(&url).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("couldn't start yt-dlp")?;
         // Read both pipes on their own threads so a full pipe can't stall yt-dlp.
         let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
@@ -396,7 +406,23 @@ pub async fn prepare(client: &Client, url: &str, headers: Vec<(String, String)>)
     }
     let done = async {
         let tools = ensure_tools(client, &Note::default(), false).await?;
-        let json = ytdlp_json(tools.ytdlp, format!("https://www.youtube.com/watch?v={id}"), headers, false).await?;
+        let watch = format!("https://www.youtube.com/watch?v={id}");
+        // With a JS runtime when there is one: only then are YouTube's speed
+        // checks solved, and without that its servers send the file at a
+        // crawl. It takes a few seconds, but runs while the user picks a
+        // quality. Without a runtime (or if that fails), the quick lookup.
+        let quick = || ytdlp_json(tools.ytdlp.clone(), watch.clone(), headers.clone(), false);
+        let json = if js_runtime().is_some() {
+            match ytdlp_json(tools.ytdlp.clone(), watch.clone(), headers.clone(), true).await {
+                Ok(j) => j,
+                Err(e) => {
+                    crate::log::line(&format!("lookup of {id} with {} failed, trying without: {e:#}", js_runtime().unwrap_or("")));
+                    quick().await?
+                }
+            }
+        } else {
+            quick().await?
+        };
         std::fs::create_dir_all(path.parent().unwrap())?;
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &json)?;
@@ -694,7 +720,7 @@ async fn attempt(tools: &Tools, job: &Job, progress: &Arc<Progress>, note: &Note
     if let Some(dir) = &tools.ffmpeg {
         cmd.arg("--ffmpeg-location").arg(dir);
     }
-    add_headers(&mut cmd, &job.headers);
+    add_headers(&mut cmd, &headers_for(&job.url, &job.headers, with_js));
     // yt-dlp treats % in the output name as a template field.
     cmd.arg("-o").arg(job.dest.to_string_lossy().replace('%', "%%"));
     // A saved lookup skips yt-dlp's slowest step. (The retry with a JS
@@ -799,6 +825,15 @@ pub fn cleanup(dest: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn youtube_cookies_only_with_a_runtime() {
+        let h = vec![("Cookie".to_string(), "SID=1".to_string()), ("Referer".to_string(), "x".to_string())];
+        let yt = "https://www.youtube.com/watch?v=M5OCLifZK1w";
+        assert_eq!(super::headers_for(yt, &h, false).len(), 1);
+        assert_eq!(super::headers_for(yt, &h, true).len(), 2);
+        assert_eq!(super::headers_for("https://vimeo.com/1", &h, false).len(), 2);
+    }
 
     #[test]
     fn finds_youtube_ids() {

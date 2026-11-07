@@ -53,7 +53,7 @@
       .btn:hover { background: rgba(30, 31, 38, .94); }
       .btn .chev { opacity: .6; margin-left: 2px; transition: transform .15s; }
       .wrap.open .btn .chev { transform: rotate(180deg); }
-      .panel { width: 320px; max-height: 300px; overflow: auto; padding: 6px; border-radius: 12px; background: rgba(22, 23, 28, .94); color: #eef0f3;
+      .panel { width: 320px; padding: 6px; border-radius: 12px; background: rgba(22, 23, 28, .94); color: #eef0f3;
         box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 16px 48px rgba(0,0,0,.5); backdrop-filter: blur(18px) saturate(1.5); display: none; }
       .wrap.open .panel { display: block; animation: pop .14s ease-out; }
       @keyframes pop { from { opacity: 0; transform: translateY(-4px); } }
@@ -68,6 +68,12 @@
       .meta { flex: 1; min-width: 0; }
       .meta b { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .meta span { display: block; margin-top: 1px; font-size: 11.5px; color: #8a8e98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      /* quality list: one short row each, size on the right */
+      .panel.q { width: 210px; }
+      .qrow { display: flex; align-items: baseline; gap: 12px; width: 100%; height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #eef0f3; cursor: pointer; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; align-items: center; }
+      .qrow:hover { background: rgba(255,255,255,.08); }
+      .qrow .sz { margin-left: auto; font-weight: 500; font-size: 12px; color: #8a8e98; }
+      .qsep { height: 1px; margin: 4px 6px; background: rgba(255,255,255,.08); }
       .msg { padding: 10px 8px 12px; font-size: 12.5px; color: #a4a8b1; line-height: 1.5; }
       .msg.ok { color: #4cb782; } .msg.err { color: #eb6b6b; }
     </style>
@@ -123,6 +129,7 @@
 
   async function toggle() {
     if (open) { setOpen(false); return; }
+    panel.classList.remove("q");
     setOpen(true);
     if (/(^|\.)youtube\.com$/i.test(location.hostname) && (await youtubeMenu())) return;
     let res;
@@ -212,8 +219,10 @@
   }
 
   function qualityMenu(url, name, qualities) {
-    panel.innerHTML = `<div class="head">Download with SwiftDL</div>` + qualities.map((q, i) =>
-      `<button class="item" data-q="${i}"><span class="tag${q.ext === "mp4" ? "" : " stream"}">${q.ext.toUpperCase()}</span><span class="meta"><b>${q.label}${q.size ? ` · ${bytes(q.size)}` : ""}</b><span>${q.label === "Audio only" ? "Sound only" : "Video with sound"}</span></span></button>`).join("");
+    const row = (q, i) => `<button class="qrow" data-q="${i}"><span>${q.label}</span><span class="sz">${q.size ? bytes(q.size) : ""}</span></button>`;
+    const audio = qualities.findIndex((q) => q.label === "Audio only");
+    panel.classList.add("q");
+    panel.innerHTML = qualities.map((q, i) => (i === audio ? `<div class="qsep"></div>` : "") + row(q, i)).join("");
     panel.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       const pick = Number(b.dataset.q);
@@ -230,6 +239,7 @@
   }
 
   async function grab(url, filename, extra = {}) {
+    panel.classList.remove("q");
     panel.innerHTML = `<div class="msg">Sending to SwiftDL…</div>`;
     let res;
     try { res = await chrome.runtime.sendMessage({ type: "grab", url: decodeURI(url), filename, ...extra }); } catch (e) { res = { ok: false, error: String(e?.message || e) }; }
