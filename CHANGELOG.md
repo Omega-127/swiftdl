@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-07
+
 ### Added
 - **Instant quality menu on any site.** The extension reads the qualities of
   the stream the page is already playing (HLS or DASH) and, on YouTube, from
@@ -224,7 +226,8 @@ uses [Semantic Versioning](https://semver.org/).
 - GitHub Actions for CI and tagged releases (Windows, macOS, Linux and the
   extension zip).
 
-[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/harshsinghsv/swiftdl/compare/v0.2.3...v0.3.0
