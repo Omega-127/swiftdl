@@ -6,6 +6,26 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Instant quality menu on any site.** The extension reads the qualities of
+  the stream the page is already playing (HLS or DASH) and, on YouTube, from
+  the player itself, so 1080p, 4K and the rest show at once.
+- **SwiftDL downloads streams itself.** HLS and DASH pieces are fetched many
+  at a time with the browser's cookies and joined into one MP4, with no wait
+  for yt-dlp. Handles AES-128 streams, separate audio, and pause/resume.
+- **Faster YouTube.** The video is looked up while you pick a quality, then
+  downloaded directly over 16 connections (yt-dlp stays as the fallback).
+
+### Changed
+- The new logo everywhere: app, tray, installer, extension.
+- A styled Windows installer (sidebar and header art, SwiftDL icons).
+- The quality and category menus match the app instead of the system list.
+- The app notices the extension within seconds of it being added.
+- Tools (ffmpeg, yt-dlp) download over 8 connections; ffmpeg takes about a
+  minute instead of up to twenty.
+- The New download window says what it is actually waiting for, and gives
+  up after 90 seconds instead of spinning forever.
+
 ## [0.3.2] - 2026-11-07
 
 ### Added

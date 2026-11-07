@@ -31,7 +31,7 @@
   // and the quality is chosen in SwiftDL.
   const VIDEO_SITE = /(^|\.)(youtube\.com|youtube-nocookie\.com|vimeo\.com|x\.com|twitter\.com|reddit\.com|instagram\.com|tiktok\.com|facebook\.com|twitch\.tv|dailymotion\.com|bilibili\.com)$/i;
   const onVideoSite = () => VIDEO_SITE.test(location.hostname);
-  const LOGO = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#2a2c32"/><path d="M8 7l4 4 4-4" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity=".55"/><path d="M8 11.3l4 4 4-4" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="7.6" y="17" width="8.8" height="1.9" rx=".95" fill="#fff"/></svg>`;
+  const LOGO = `<svg viewBox="0 0 64 64" width="16" height="16" aria-hidden="true"><rect width="64" height="64" rx="14.5" fill="#24262b"/><g fill="#fff" transform="translate(13 13) scale(1.1875)"><rect x="4.5" y="3" width="4.4" height="12" rx="2.2"/><rect x="10.9" y="3" width="4.4" height="17" rx="2.2"/><rect x="16.7" y="3" width="4.4" height="17" rx="2.2"/><rect x="23.1" y="3" width="4.4" height="12" rx="2.2"/><path d="M6 21.5 16 28l10-6.5" fill="none" stroke="#fff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
 
   let host, root, wrap, btn, panel, video = null, hideTimer = 0, raf = 0, open = false;
 
@@ -124,10 +124,16 @@
   async function toggle() {
     if (open) { setOpen(false); return; }
     setOpen(true);
-    if (onVideoSite()) return grab(location.href, title());
-    panel.innerHTML = `<div class="msg">Looking for downloadable files…</div>`;
+    if (/(^|\.)youtube\.com$/i.test(location.hostname) && (await youtubeMenu())) return;
     let res;
     try { res = await chrome.runtime.sendMessage({ type: "media" }); } catch { res = { items: [] }; }
+    // Any site: if the player loaded a stream (HLS or DASH), list its
+    // qualities now. The oldest one is the main playlist with every quality.
+    const hls = (res?.items || []).filter((m) => m.kind === "hls" || m.kind === "dash").at(-1);
+    if (hls?.qualities?.length) { qualityMenu(hls.url, title(), hls.qualities); return; }
+    if (hls && (await streamMenu(hls.url))) return;
+    if (onVideoSite()) return grab(location.href, title());
+    panel.innerHTML = `<div class="msg">Looking for downloadable files…</div>`;
     const items = [...(res?.items || [])];
     const src = video?.currentSrc;
     if (src && /^https?:/i.test(src) && !items.some((m) => m.url === src)) items.unshift({ url: src, kind: "file", mime: "video/mp4", size: 0 });
@@ -162,10 +168,71 @@
     return `SwiftDL couldn't take this download: ${text(error) || "no answer from the app"}.`;
   }
 
-  async function grab(url, filename) {
+  // ---------- YouTube: qualities straight from the page ----------
+  // yt.js (inside the page) reads what the player already has. Same choices
+  // and format selectors as the app's own lookup, so either way matches.
+  const askPage = () => new Promise((resolve) => {
+    const on = (e) => { if (e.source === window && e.data?.swiftdl === "yt-info") { removeEventListener("message", on); resolve(e.data); } };
+    addEventListener("message", on);
+    postMessage({ swiftdl: "yt-ask" }, "*");
+    setTimeout(() => { removeEventListener("message", on); resolve(null); }, 800);
+  });
+  function ytQualities(formats) {
+    const videos = formats.filter((f) => f.mime.startsWith("video/") && f.height > 0);
+    const audios = formats.filter((f) => f.mime.startsWith("audio/"));
+    const m4a = audios.filter((f) => f.mime.startsWith("audio/mp4"));
+    const audioSize = Math.max(0, ...(m4a.length ? m4a : audios).map((f) => f.size));
+    const heights = [...new Set(videos.map((f) => f.height))].sort((a, b) => b - a);
+    const list = heights.map((h) => {
+      const at = videos.filter((f) => f.height === h);
+      const best = at.reduce((a, b) => (b.bitrate > a.bitrate ? b : a));
+      const fps = Math.max(...at.map((f) => f.fps));
+      return {
+        label: fps > 30.5 ? `${h}p${Math.round(fps)}` : `${h}p`,
+        format: `bv*[height=${h}][vcodec^=avc1]+ba[ext=m4a]/bv*[height=${h}]+ba[ext=m4a]/bv*[height=${h}]+ba/b[height=${h}]/bv*[height<=${h}]+ba/b`,
+        ext: "mp4",
+        size: best.size ? best.size + audioSize : null,
+      };
+    });
+    if (audios.length) list.push({ label: "Audio only", format: "ba[ext=m4a]/ba", ext: m4a.length ? "m4a" : "webm", size: audioSize || null });
+    return list;
+  }
+  async function youtubeMenu() {
+    const info = await askPage();
+    if (!info?.id || info.live || !info.formats.length) return false;
+    const qualities = ytQualities(info.formats);
+    if (!qualities.length) return false;
+    const name = (info.title || title()).replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+    // Just the video: a "list=" mix would make yt-dlp think about the playlist.
+    const url = `https://www.youtube.com/watch?v=${info.id}`;
+    qualityMenu(url, name, qualities);
+    // Start the slow part now, while the user picks a quality.
+    chrome.runtime.sendMessage({ type: "prepare", url }).catch(() => {});
+    return true;
+  }
+
+  function qualityMenu(url, name, qualities) {
+    panel.innerHTML = `<div class="head">Download with SwiftDL</div>` + qualities.map((q, i) =>
+      `<button class="item" data-q="${i}"><span class="tag${q.ext === "mp4" ? "" : " stream"}">${q.ext.toUpperCase()}</span><span class="meta"><b>${q.label}${q.size ? ` · ${bytes(q.size)}` : ""}</b><span>${q.label === "Audio only" ? "Sound only" : "Video with sound"}</span></span></button>`).join("");
+    panel.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pick = Number(b.dataset.q);
+      grab(url, `${name}.${qualities[pick].ext}`, { qualities, pick });
+    }));
+  }
+  async function streamMenu(url) {
+    panel.innerHTML = `<div class="msg">Reading qualities…</div>`;
+    let res;
+    try { res = await chrome.runtime.sendMessage({ type: "streamQualities", url }); } catch { res = null; }
+    if (!res?.qualities?.length) return false;
+    qualityMenu(url, title(), res.qualities);
+    return true;
+  }
+
+  async function grab(url, filename, extra = {}) {
     panel.innerHTML = `<div class="msg">Sending to SwiftDL…</div>`;
     let res;
-    try { res = await chrome.runtime.sendMessage({ type: "grab", url: decodeURI(url), filename }); } catch (e) { res = { ok: false, error: String(e?.message || e) }; }
+    try { res = await chrome.runtime.sendMessage({ type: "grab", url: decodeURI(url), filename, ...extra }); } catch (e) { res = { ok: false, error: String(e?.message || e) }; }
     panel.innerHTML = res?.ok ? `<div class="msg ok">Sent to SwiftDL ✓</div>` : `<div class="msg err">${failure(res?.error || "")}</div>`;
     setTimeout(() => { setOpen(false); scheduleHide(); }, 1800);
   }

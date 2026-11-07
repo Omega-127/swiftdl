@@ -109,6 +109,8 @@ async fn ensure_tools(client: &Client, note: &Note, need_ffmpeg: bool) -> Result
         update_in_background(&ytdlp);
     }
     if need_ffmpeg && ffmpeg_dir().is_none() && cfg!(windows) {
+        let own = tools_dir().join("ffmpeg").join(FFMPEG_EXE);
+        crate::log::line(&format!("ffmpeg not found ({}: {:?}), downloading it", own.display(), std::fs::metadata(&own).err()));
         let zip = tools_dir().join("ffmpeg.zip");
         let url = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip";
         fetch(client, url, &zip, note, "Getting ffmpeg").await.context("couldn't download ffmpeg")?;
@@ -121,25 +123,38 @@ async fn ensure_tools(client: &Client, note: &Note, need_ffmpeg: bool) -> Result
     Ok(Tools { ytdlp, ffmpeg: ffmpeg_dir() })
 }
 
-/// Streams `url` to `dest` (via a temp file), showing progress in `note`.
+/// Downloads `url` to `dest` with SwiftDL's own engine: many connections at
+/// once, and resumable if the app is closed halfway. A single connection to
+/// GitHub can crawl along at a few KB/s; ffmpeg alone is over 100 MB.
 async fn fetch(client: &Client, url: &str, dest: &Path, note: &Note, label: &str) -> Result<()> {
     set_note(note, label);
-    let mut resp = client.get(url).send().await?.error_for_status()?;
-    let total = resp.content_length().unwrap_or(0);
-    let tmp = dest.with_extension("download");
-    let mut file = std::fs::File::create(&tmp)?;
-    let mut got = 0u64;
-    while let Some(chunk) = resp.chunk().await? {
-        file.write_all(&chunk)?;
-        got += chunk.len() as u64;
-        if total > 0 {
-            set_note(note, format!("{label} · {}%", got * 100 / total));
-        }
+    let req = swiftdl_engine::Request {
+        url: url.to_string(),
+        dest: dest.to_path_buf(),
+        connections: 8,
+        headers: Default::default(),
+        restart: false,
+    };
+    let progress = Arc::new(Progress::default());
+    let ticker = {
+        let (progress, note, label) = (progress.clone(), note.clone(), label.to_string());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let (got, total) = (progress.downloaded.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
+                if total > 0 {
+                    set_note(&note, format!("{label} · {}%", got * 100 / total));
+                }
+            }
+        })
+    };
+    let limiter = Arc::new(swiftdl_engine::SpeedLimiter::new(0));
+    let done = swiftdl_engine::run(client, &req, progress, CancellationToken::new(), limiter).await;
+    ticker.abort();
+    match done? {
+        Outcome::Completed => Ok(()),
+        Outcome::Paused => bail!("the download stopped"),
     }
-    file.flush()?;
-    drop(file);
-    std::fs::rename(&tmp, dest)?;
-    Ok(())
 }
 
 /// Copies the programs and libraries from the archive's `bin` folder.
@@ -187,6 +202,20 @@ fn update_in_background(ytdlp: &Path) {
     std::thread::spawn(move || {
         let _ = command(&ytdlp).arg("-U").stdout(Stdio::null()).stderr(Stdio::null()).status();
     });
+}
+
+/// ffmpeg itself, if we have it.
+pub fn ffmpeg_path() -> Option<PathBuf> {
+    ffmpeg_dir().map(|d| d.join(FFMPEG_EXE))
+}
+
+/// Gets ffmpeg first if it's missing (Windows), for joining streams.
+pub async fn ensure_ffmpeg(client: &Client, note: &Note) -> Result<()> {
+    ensure_tools(client, note, true).await.map(|_| ())
+}
+
+pub fn quiet_command(program: &Path) -> Command {
+    command(program)
 }
 
 fn command(program: &Path) -> Command {
@@ -238,7 +267,7 @@ fn js_runtime() -> Option<&'static str> {
 
 // ---------- probing ----------
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Quality {
     pub label: String,
@@ -257,24 +286,145 @@ pub struct MediaInfo {
     pub qualities: Vec<Quality>,
 }
 
+/// What looking up a video is doing right now ("Getting yt-dlp · 40%"), for
+/// the New download window. None while yt-dlp itself is reading the page.
+pub static PROBE_NOTE: LazyLock<Note> = LazyLock::new(Note::default);
+
+/// Longest wait for yt-dlp to read a page before giving up.
+const PROBE_LIMIT: Duration = Duration::from_secs(90);
+
 /// Asks yt-dlp what the page offers, as a short list of qualities.
+///
+/// The first try runs without a JavaScript runtime: listing the qualities
+/// doesn't need one, and with one YouTube takes 30-40 s instead of about 5.
+/// Only if that comes back short (an error, or nothing above 480p) does it
+/// ask again with the runtime. The download itself always gets the runtime.
 pub async fn probe(client: &Client, url: &str, headers: Vec<(String, String)>) -> Result<MediaInfo> {
-    let note: Note = Arc::default();
-    let tools = ensure_tools(client, &note, false).await?;
-    let url = url.to_string();
+    let tools = ensure_tools(client, &PROBE_NOTE, false).await?;
+    *PROBE_NOTE.lock().unwrap() = None;
+    let quick = read_info(tools.ytdlp.clone(), url.to_string(), headers.clone(), false).await;
+    let enough = |i: &MediaInfo| i.qualities.iter().any(|q| q.label.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("").parse::<u32>().is_ok_and(|h| h > 480));
+    match quick {
+        Ok(info) if enough(&info) || js_runtime().is_none() => Ok(info),
+        quick => {
+            if let Err(e) = &quick {
+                crate::log::line(&format!("quick lookup failed, trying with {}: {e:#}", js_runtime().unwrap_or("")));
+            }
+            match read_info(tools.ytdlp, url.to_string(), headers, true).await {
+                Ok(info) => Ok(info),
+                // Keep a short list over nothing.
+                Err(e) => quick.or(Err(e)),
+            }
+        }
+    }
+}
+
+/// Runs `yt-dlp -J` and returns its JSON, giving up after PROBE_LIMIT.
+async fn ytdlp_json(ytdlp: PathBuf, url: String, headers: Vec<(String, String)>, with_js: bool) -> Result<Vec<u8>> {
     let url_for_log = url.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        let mut cmd = ytdlp_command(&tools.ytdlp);
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<std::process::Output> {
+        let mut cmd = if with_js { ytdlp_command(&ytdlp) } else { command(&ytdlp) };
         cmd.args(["-J", "--no-playlist", "--no-warnings", "--socket-timeout", "20"]);
         add_headers(&mut cmd, &headers);
-        cmd.arg(&url).output()
+        let mut child = cmd.arg(&url).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("couldn't start yt-dlp")?;
+        // Read both pipes on their own threads so a full pipe can't stall yt-dlp.
+        let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+        let out = std::thread::spawn(move || { let mut b = vec![]; let _ = so.read_to_end(&mut b); b });
+        let err = std::thread::spawn(move || { let mut b = vec![]; let _ = se.read_to_end(&mut b); b });
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait()? {
+                break s;
+            }
+            if start.elapsed() > PROBE_LIMIT {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("The site didn't answer in {} seconds. Check your connection and try again.", PROBE_LIMIT.as_secs());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
     })
     .await??;
     if !out.status.success() {
         crate::log::line(&format!("yt-dlp couldn't read {url_for_log}: {}", String::from_utf8_lossy(&out.stderr).trim()));
         bail!("{}", last_error(&String::from_utf8_lossy(&out.stderr)).unwrap_or_else(|| "yt-dlp couldn't read this page".into()));
     }
-    let info: Value = serde_json::from_slice(&out.stdout).context("yt-dlp gave an unexpected answer")?;
+    Ok(out.stdout)
+}
+
+// ---------- YouTube: look the video up before the download is started ----------
+//
+// Most of the wait before a YouTube download is yt-dlp unscrambling the
+// video's addresses. SwiftDL starts that the moment the quality menu opens
+// and saves the answer; the download then hands it to yt-dlp
+// (--load-info-json) and starts right away.
+
+/// The video id of a YouTube watch, shorts or youtu.be link.
+fn youtube_id(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let host = u.host_str()?.trim_start_matches("www.").trim_start_matches("m.");
+    let id = match host {
+        "youtube.com" | "music.youtube.com" => u.query_pairs().find(|(k, _)| k == "v").map(|(_, v)| v.into_owned())
+            .or_else(|| u.path().strip_prefix("/shorts/").map(|s| s.trim_end_matches('/').to_string())),
+        "youtu.be" => Some(u.path().trim_start_matches('/').to_string()),
+        _ => None,
+    }?;
+    (id.len() >= 6 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(id)
+}
+
+fn lookup_path(url: &str) -> Option<PathBuf> {
+    Some(crate::browser::data_dir().join("cache").join(format!("yt-{}.json", youtube_id(url)?)))
+}
+
+/// A saved lookup young enough that its addresses still work (YouTube's last
+/// about six hours; keep well inside that).
+fn fresh_lookup(url: &str) -> Option<PathBuf> {
+    let p = lookup_path(url)?;
+    let age = std::fs::metadata(&p).ok()?.modified().ok()?.elapsed().ok()?;
+    (age < Duration::from_secs(2 * 3600)).then_some(p)
+}
+
+/// Videos being looked up right now.
+static PREPARING: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+/// Looks a YouTube video up in the background and saves the answer.
+pub async fn prepare(client: &Client, url: &str, headers: Vec<(String, String)>) {
+    let (Some(id), Some(path)) = (youtube_id(url), lookup_path(url)) else { return };
+    if fresh_lookup(url).is_some() || !PREPARING.lock().unwrap().insert(id.clone()) {
+        return;
+    }
+    let done = async {
+        let tools = ensure_tools(client, &Note::default(), false).await?;
+        let json = ytdlp_json(tools.ytdlp, format!("https://www.youtube.com/watch?v={id}"), headers, false).await?;
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &json)?;
+        std::fs::rename(&tmp, &path)?;
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = done {
+        crate::log::line(&format!("couldn't look up {url} ahead of time: {e:#}"));
+    }
+    PREPARING.lock().unwrap().remove(&id);
+}
+
+/// The saved lookup for `url`, waiting for one that is still running.
+async fn wait_for_lookup(url: &str) -> Option<PathBuf> {
+    let id = youtube_id(url)?;
+    for _ in 0..300 {
+        if !PREPARING.lock().unwrap().contains(&id) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    fresh_lookup(url)
+}
+
+async fn read_info(ytdlp: PathBuf, url: String, headers: Vec<(String, String)>, with_js: bool) -> Result<MediaInfo> {
+    let stdout = ytdlp_json(ytdlp, url, headers, with_js).await?;
+    let info: Value = serde_json::from_slice(&stdout).context("yt-dlp gave an unexpected answer")?;
     Ok(MediaInfo {
         title: info["title"].as_str().unwrap_or("video").to_string(),
         site: info["extractor_key"].as_str().unwrap_or("").to_string(),
@@ -370,9 +520,167 @@ pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note,
     if let Some(dir) = job.dest.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    set_note(&note, "Getting video details");
+    set_note(&note, "Starting");
 
-    let mut cmd = ytdlp_command(&tools.ytdlp);
+    // YouTube, looked up ahead of time: fetch the files ourselves, many
+    // connections each, the way IDM does. yt-dlp is the fallback.
+    if !stream {
+        match direct(client, &job, &progress, &note, &cancel).await {
+            Ok(Some(done)) => return Ok(done),
+            Ok(None) => {}
+            Err(e) => {
+                crate::log::line(&format!("direct download of {} failed, using yt-dlp: {e:#}", job.url));
+                progress.downloaded.store(0, Ordering::Relaxed);
+                set_note(&note, "Starting");
+            }
+        }
+    }
+
+    // First without a JavaScript runtime: yt-dlp gets going several seconds
+    // sooner, and it nearly always works. If it fails, try once more with one.
+    let (mut exit, mut stderr) = attempt(&tools, &job, &progress, &note, &cancel, stream, merges, false).await?;
+    if exit == Some(false) && js_runtime().is_some() && !cancel.is_cancelled() {
+        crate::log::line(&format!("yt-dlp failed without {}, retrying with it: {}", js_runtime().unwrap_or(""), last_error(&stderr).unwrap_or_default()));
+        set_note(&note, "Starting");
+        progress.downloaded.store(0, Ordering::Relaxed);
+        (exit, stderr) = attempt(&tools, &job, &progress, &note, &cancel, stream, merges, true).await?;
+    }
+    progress.connections.store(0, Ordering::Relaxed);
+    *note.lock().unwrap() = None;
+
+    match exit {
+        None => Ok(Outcome::Paused),
+        Some(true) if job.dest.exists() => {
+            let size = std::fs::metadata(&job.dest).map(|m| m.len()).unwrap_or(0);
+            progress.total.store(size, Ordering::Relaxed);
+            progress.downloaded.store(size, Ordering::Relaxed);
+            Ok(Outcome::Completed)
+        }
+        Some(true) => Err(anyhow!("yt-dlp finished but the file wasn't created")),
+        Some(false) => Err(anyhow!(last_error(&stderr).unwrap_or_else(|| "yt-dlp stopped with an error".into()))),
+    }
+}
+
+/// The formats a quality choice means, picked from a saved lookup the same
+/// way yt-dlp would: `(video, audio)`, either may be absent.
+fn choose<'a>(info: &'a Value, format: &str) -> Option<(Option<&'a Value>, Option<&'a Value>)> {
+    let formats = info["formats"].as_array()?;
+    let plain = |f: &&Value| f["protocol"].as_str() == Some("https") && f["url"].is_string();
+    let codec = |f: &Value, k: &str| f[k].as_str().is_some_and(|c| c != "none");
+    let tbr = |f: &&&Value| f["tbr"].as_f64().unwrap_or(0.0);
+    let audio = formats.iter().filter(plain).filter(|f| codec(f, "acodec") && !codec(f, "vcodec"));
+    let best_m4a = audio.clone().filter(|f| f["ext"].as_str() == Some("m4a")).max_by(|a, b| tbr(&a).total_cmp(&tbr(&b)));
+    let best_audio = best_m4a.or_else(|| audio.max_by(|a, b| tbr(&a).total_cmp(&tbr(&b))));
+    if format.starts_with("ba") {
+        return Some((None, Some(best_audio?)));
+    }
+    let h: u64 = format.split("height=").nth(1)?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+    let at: Vec<&Value> = formats.iter().filter(plain).filter(|f| codec(f, "vcodec") && !codec(f, "acodec") && f["height"].as_u64() == Some(h)).collect();
+    // Same preference as the format string: H.264 first, it plays everywhere.
+    let avc = at.iter().copied().filter(|f| f["vcodec"].as_str().is_some_and(|c| c.starts_with("avc1"))).max_by(|a, b| tbr(&a).total_cmp(&tbr(&b)));
+    let video = avc.or_else(|| at.iter().copied().max_by(|a, b| tbr(&a).total_cmp(&tbr(&b))))?;
+    Some((Some(video), Some(best_audio?)))
+}
+
+/// YouTube holds each connection to roughly 0.5 MB/s; 16 at once doubled the
+/// speed of 8 in testing, and 32 was no faster than 16.
+const YOUTUBE_CONNECTIONS: usize = 16;
+
+/// Downloads a YouTube video straight from its saved lookup with SwiftDL's
+/// engine. `None` when there is no lookup or nothing in it fits, so yt-dlp
+/// should do it instead.
+async fn direct(client: &Client, job: &Job, progress: &Arc<Progress>, note: &Note, cancel: &CancellationToken) -> Result<Option<Outcome>> {
+    if youtube_id(&job.url).is_none() {
+        return Ok(None);
+    }
+    // Not looked up yet (a pasted link, say): do it now, then download directly.
+    if wait_for_lookup(&job.url).await.is_none() {
+        set_note(note, "Getting video details");
+        prepare(client, &job.url, job.headers.clone()).await;
+    }
+    let Some(saved) = wait_for_lookup(&job.url).await else { return Ok(None) };
+    let info: Value = serde_json::from_slice(&std::fs::read(&saved)?)?;
+    let Some((video, audio)) = choose(&info, &job.format) else { return Ok(None) };
+    let parts: Vec<(&Value, PathBuf)> = [(video, "video"), (audio, "audio")]
+        .into_iter()
+        .filter_map(|(f, tag)| Some((f?, job.dest.with_extension(format!("{tag}.{}", f?["ext"].as_str().unwrap_or("bin"))))))
+        .collect();
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    *note.lock().unwrap() = None;
+    let total: u64 = parts.iter().map(|(f, _)| f["filesize"].as_u64().or(f["filesize_approx"].as_u64()).unwrap_or(0)).sum();
+    progress.total.store(total, Ordering::Relaxed);
+
+    let each: Vec<Arc<Progress>> = parts.iter().map(|_| Arc::new(Progress::default())).collect();
+    let ticker = {
+        let (each, progress) = (each.clone(), progress.clone());
+        tokio::spawn(async move {
+            loop {
+                let got: u64 = each.iter().map(|p| p.downloaded.load(Ordering::Relaxed)).sum();
+                let conns: usize = each.iter().map(|p| p.connections.load(Ordering::Relaxed)).sum();
+                progress.downloaded.store(got, Ordering::Relaxed);
+                progress.connections.store(conns, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+    };
+    let limiter = Arc::new(swiftdl_engine::SpeedLimiter::new(0));
+    let started = std::time::Instant::now();
+    let runs = parts.iter().zip(&each).map(|((f, path), p)| {
+        let mut headers = swiftdl_engine::header::HeaderMap::new();
+        for (k, v) in f["http_headers"].as_object().into_iter().flatten() {
+            if let (Ok(k), Some(Ok(v))) = (k.parse::<swiftdl_engine::header::HeaderName>(), v.as_str().map(|v| v.parse())) {
+                headers.insert(k, v);
+            }
+        }
+        let req = swiftdl_engine::Request { url: f["url"].as_str().unwrap_or_default().to_string(), dest: path.clone(), connections: YOUTUBE_CONNECTIONS, headers, restart: false };
+        let (p, cancel, limiter) = (p.clone(), cancel.clone(), limiter.clone());
+        async move { swiftdl_engine::run(client, &req, p, cancel, limiter).await }
+    });
+    let results = futures_util::future::join_all(runs).await;
+    ticker.abort();
+    progress.connections.store(0, Ordering::Relaxed);
+    for r in results {
+        if r? == Outcome::Paused {
+            return Ok(Some(Outcome::Paused));
+        }
+    }
+
+    let fetched = started.elapsed();
+    set_note(note, "Joining video and audio");
+    let files: Vec<PathBuf> = parts.iter().map(|(_, p)| p.clone()).collect();
+    if files.len() == 1 {
+        std::fs::rename(&files[0], &job.dest)?;
+    } else {
+        let ff = ffmpeg_path().context("Joining video and audio needs ffmpeg.")?;
+        let (files2, dest) = (files.clone(), job.dest.clone());
+        let out = tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = command(&ff);
+            cmd.args(["-y", "-loglevel", "error", "-i"]).arg(&files2[0]).arg("-i").arg(&files2[1])
+                .args(["-map", "0:v", "-map", "1:a", "-c", "copy", "-movflags", "+faststart"]).arg(&dest);
+            cmd.output()
+        })
+        .await??;
+        if !out.status.success() {
+            bail!("couldn't join video and audio: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""));
+        }
+        for f in &files {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+    *note.lock().unwrap() = None;
+    let size = std::fs::metadata(&job.dest).map(|m| m.len()).unwrap_or(0);
+    crate::log::line(&format!("direct download: {} MB fetched in {:.1}s, joined in {:.1}s", size / 1_000_000, fetched.as_secs_f64(), (started.elapsed() - fetched).as_secs_f64()));
+    progress.total.store(size, Ordering::Relaxed);
+    progress.downloaded.store(size, Ordering::Relaxed);
+    Ok(Some(Outcome::Completed))
+}
+
+/// One yt-dlp run. Returns how it ended (None when cancelled) and its errors.
+#[allow(clippy::too_many_arguments)]
+async fn attempt(tools: &Tools, job: &Job, progress: &Arc<Progress>, note: &Note, cancel: &CancellationToken, stream: bool, merges: bool, with_js: bool) -> Result<(Option<bool>, String)> {
+    let mut cmd = if with_js { ytdlp_command(&tools.ytdlp) } else { command(&tools.ytdlp) };
     cmd.args(["-f", &job.format, "--no-playlist", "--newline", "--no-colors", "--no-mtime", "-N", "4"])
         .args(["--progress-template", "download:SDL|%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s"]);
     if merges {
@@ -388,7 +696,13 @@ pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note,
     }
     add_headers(&mut cmd, &job.headers);
     // yt-dlp treats % in the output name as a template field.
-    cmd.arg("-o").arg(job.dest.to_string_lossy().replace('%', "%%")).arg(&job.url);
+    cmd.arg("-o").arg(job.dest.to_string_lossy().replace('%', "%%"));
+    // A saved lookup skips yt-dlp's slowest step. (The retry with a JS
+    // runtime looks the video up afresh, in case the saved one was the trouble.)
+    match if with_js { None } else { wait_for_lookup(&job.url).await } {
+        Some(saved) => { cmd.arg("--load-info-json").arg(saved); }
+        None => { cmd.arg(&job.url); }
+    }
     let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("couldn't start yt-dlp")?;
 
     let stdout = child.stdout.take().unwrap();
@@ -413,23 +727,8 @@ pub async fn run(client: &Client, job: Job, progress: Arc<Progress>, note: Note,
     };
     let exit = waiter.await??;
     let _ = reader.join();
-    progress.connections.store(0, Ordering::Relaxed);
-    *note.lock().unwrap() = None;
-
-    match exit {
-        None => Ok(Outcome::Paused),
-        Some(true) if job.dest.exists() => {
-            let size = std::fs::metadata(&job.dest).map(|m| m.len()).unwrap_or(0);
-            progress.total.store(size, Ordering::Relaxed);
-            progress.downloaded.store(size, Ordering::Relaxed);
-            Ok(Outcome::Completed)
-        }
-        Some(true) => Err(anyhow!("yt-dlp finished but the file wasn't created")),
-        Some(false) => {
-            let stderr = errors.lock().unwrap().clone();
-            Err(anyhow!(last_error(&stderr).unwrap_or_else(|| "yt-dlp stopped with an error".into())))
-        }
-    }
+    let stderr = errors.lock().unwrap().clone();
+    Ok((exit, stderr))
 }
 
 /// Waits for yt-dlp. `None` when cancelled, else whether it succeeded.
@@ -502,6 +801,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn finds_youtube_ids() {
+        assert_eq!(super::youtube_id("https://www.youtube.com/watch?v=M5OCLifZK1w&list=RD").as_deref(), Some("M5OCLifZK1w"));
+        assert_eq!(super::youtube_id("https://youtu.be/M5OCLifZK1w").as_deref(), Some("M5OCLifZK1w"));
+        assert_eq!(super::youtube_id("https://www.youtube.com/shorts/abcDEF12345").as_deref(), Some("abcDEF12345"));
+        assert_eq!(super::youtube_id("https://vimeo.com/123"), None);
+    }
+
+    #[test]
     fn recognises_streams() {
         assert!(is_stream_url("https://cdn.example.com/live/master.m3u8"));
         assert!(is_stream_url("https://cdn.example.com/v/index.M3U8?token=abc#t=5"));
@@ -550,5 +857,28 @@ mod tests {
         assert_eq!(progress.downloaded.load(Ordering::Relaxed), 15298808 + 10202210);
         assert_eq!(progress.total.load(Ordering::Relaxed), 15298808 + 10202210);
         assert_eq!(note.lock().unwrap().as_deref(), Some("Merging video and audio"));
+    }
+}
+
+#[cfg(test)]
+mod live {
+    /// `cargo test --release live_youtube -- --ignored --nocapture` with
+    /// SWIFTDL_YT_URL and SWIFTDL_YT_OUT set. Downloads 1080p for real.
+    #[test]
+    #[ignore]
+    fn live_youtube() {
+        let url = std::env::var("SWIFTDL_YT_URL").unwrap();
+        let dest = std::path::PathBuf::from(std::env::var("SWIFTDL_YT_OUT").unwrap());
+        let client = swiftdl_engine::build_client().unwrap();
+        let format = "bv*[height=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height=1080]+ba[ext=m4a]/bv*[height=1080]+ba/b[height=1080]/bv*[height<=1080]+ba/b".to_string();
+        tauri::async_runtime::block_on(async {
+            let t = std::time::Instant::now();
+            super::prepare(&client, &url, vec![]).await;
+            println!("lookup: {:.1}s", t.elapsed().as_secs_f64());
+            let t = std::time::Instant::now();
+            let job = super::Job { url, format, dest: dest.clone(), headers: vec![] };
+            let r = super::run(&client, job, Default::default(), Default::default(), Default::default()).await.unwrap();
+            println!("{r:?}: download + join {:.1}s, {} bytes", t.elapsed().as_secs_f64(), std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0));
+        });
     }
 }

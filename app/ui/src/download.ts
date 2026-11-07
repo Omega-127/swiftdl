@@ -95,6 +95,7 @@ async function confirmView(token: number) {
     $("c-name").value = inc.filename || "download";
     $("c-size").innerHTML = `<span class="err">Couldn't reach the file: ${esc(String(e))}</span>`;
   }
+  styledSelect($("c-cat") as HTMLSelectElement);
   $("c-cat").onchange = () => { $("c-tile").innerHTML = glyph($("c-cat").value, $("c-name").value); if (!dirTouched) setDir(dirFor($("c-cat").value)); };
   $("c-browse").onclick = async () => { const d = await invoke("pick_folder", { start: dir }); if (d) { setDir(d); dirTouched = true; } };
   $("c-cancel").onclick = () => { invoke("forget_confirm", { token }); $("w-close").click(); };
@@ -124,10 +125,9 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     <div class="d-head"><span id="c-tile">${glyph("Video")}</span><div class="d-name"><input id="c-name" spellcheck="false" placeholder="Getting video details…"><div class="d-sub"><span class="st">${esc(host(inc.url))}</span></div></div></div>
     <div class="kv">
       <span class="k">Address</span><span class="v"><span title="${esc(inc.url)}">${esc(inc.url)}</span></span>
-      <span class="k">Quality</span><span class="v" id="c-q"><span class="spinner"></span><span class="muted">Getting video details…</span></span>
+      <span class="k">Quality</span><span class="v" id="c-q"><span class="spinner"></span><span class="muted" id="c-status">Getting video details…</span></span>
       <span class="k">Save to</span><span class="v"><span class="path" id="c-dir" title=""></span><button class="btn sm" id="c-browse">Change</button></span>
     </div>
-    <p class="muted note" id="c-first" hidden>Setting up video downloads. This happens once.</p>
     <div class="d-foot">
       <button class="btn" id="c-later" disabled>Download later</button>
       <span class="grow"></span>
@@ -136,7 +136,18 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     </div>`;
   const setDir = (d: string) => { dir = d; $("c-dir").textContent = d; $("c-dir").title = d; };
   setDir(dirFor("Video"));
-  const slow = setTimeout(() => { $("c-first").hidden = false; }, 4000);
+  // Say what is actually happening, with the seconds so far: fetching the
+  // video tools the first time, otherwise waiting on the site.
+  const site = host(inc.url).replace(/^www\./, "");
+  const started = Date.now();
+  const status = setInterval(async () => {
+    const el = document.getElementById("c-status");
+    if (!el) return;
+    const note = await invoke("probe_note").catch(() => null);
+    const s = Math.round((Date.now() - started) / 1000);
+    el.textContent = note ? `${note.replace(" · ", "… ")}${note.includes("%") ? "" : "…"}`
+      : s < 3 ? "Getting video details…" : `Asking ${site} about this video… ${s} s`;
+  }, 500);
   const quality = (): Quality => info!.qualities[Number($("c-qs").value) || 0];
   const applyQuality = () => {
     const q = quality(), cat = q.ext === "mp4" || q.ext === "webm" ? "Video" : "Music";
@@ -145,7 +156,12 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     if (!dirTouched) setDir(dirFor(cat));
   };
   try {
-    info = await invoke("probe_media", { url: inc.url, headers });
+    // The extension may have read the qualities from the page already: then
+    // there is nothing to wait for.
+    const known = inc.qualities?.length ? inc.qualities : null;
+    info = known
+      ? { title: (inc.filename || "video").replace(/\.[a-z0-9]{2,4}$/i, ""), site: "", duration: null, qualities: known }
+      : await invoke("probe_media", { url: inc.url, headers });
     // A stream's own title is just its playlist's name ("index", "master"),
     // so use the page's title that came with it from the browser.
     const stream = /\.(m3u8|mpd)(?:$|[?#])/i.test(inc.url);
@@ -154,9 +170,10 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     $("c-q").innerHTML = `<select id="c-qs">${info.qualities.map((q, i) => `<option value="${i}">${esc(q.label)}${q.size ? ` · ${bytes(q.size)}` : ""}</option>`).join("")}</select>`;
     // Default to the best quality up to 1080p: 4K files are huge, and
     // they're one click away.
-    const preferred = info.qualities.findIndex((q) => /^\d+p/.test(q.label) && parseInt(q.label) <= 1080);
+    const preferred = known && inc.pick != null ? inc.pick : info.qualities.findIndex((q) => /^\d+p/.test(q.label) && parseInt(q.label) <= 1080);
     $("c-qs").value = String(Math.max(0, preferred));
     $("c-qs").onchange = applyQuality;
+    styledSelect($("c-qs") as HTMLSelectElement);
     applyQuality();
     $("c-start").disabled = $("c-later").disabled = false;
     $("c-start").focus();
@@ -164,8 +181,7 @@ async function mediaView(token: number, inc: Incoming, settings: Settings, heade
     $("c-name").value = "";
     $("c-q").innerHTML = `<span class="err">${esc(String(e))}</span>`;
   } finally {
-    clearTimeout(slow);
-    $("c-first").hidden = true;
+    clearInterval(status);
   }
   $("c-browse").onclick = async () => { const d = await invoke("pick_folder", { start: dir }); if (d) { setDir(d); dirTouched = true; } };
   $("c-cancel").onclick = () => { invoke("forget_confirm", { token }); $("w-close").click(); };
@@ -309,9 +325,11 @@ function render() {
   setTitle(state === "done" ? "Download complete" : state === "error" ? "Download failed" : `${Math.floor(pct)}% · ${it.filename}`);
   $("p-sub").innerHTML = `<span class="st ${state === "error" ? "err" : ""}" title="${esc(status[0])}">${esc(status[0])}</span><span class="from">from ${esc(host(it.url))}</span>`;
   $("p-pct").textContent = it.size || state === "done" ? `${Math.floor(pct)}%` : "";
-  $("p-left").textContent = state === "done" ? bytes(it.size) : it.size ? `${bytes(it.downloaded)} of ${bytes(it.size)}` : bytes(it.downloaded);
+  // Still preparing (fetching the video tools): no numbers to show yet.
+  const preparing = state === "run" && !!it.note && !it.downloaded;
+  $("p-left").textContent = preparing ? "" : state === "done" ? bytes(it.size) : it.size ? `${bytes(it.downloaded)} of ${bytes(it.size)}` : bytes(it.downloaded);
   const conns = it.connections ? `${it.connections} connection${it.connections === 1 ? "" : "s"}` : "";
-  $("p-right").textContent = state === "run" && !finishing ? [speed(it.speed), `${dur(eta)} left`, conns].filter(Boolean).join("   ·   ")
+  $("p-right").textContent = state === "run" && !finishing && !preparing ? [speed(it.speed), `${dur(eta)} left`, conns].filter(Boolean).join("   ·   ")
     : state === "done" ? `Finished ${whenFull(it.completedAt)}` : "";
   const bar = $("p-bar");
   bar.className = `segbar ${state} ${!it.size && state === "run" ? "indet" : ""}`;
@@ -333,7 +351,7 @@ function render() {
 
 function qualityLabel(format: string | null) {
   const h = /height=(\d+)/.exec(format || "");
-  return h ? `${h[1]}p` : /^ba/.test(format || "") ? "Audio only" : "Best available";
+  return h ? `${h[1]}p` : /^ba/.test(format || "") ? "Audio only" : /^hls/.test(format || "") ? "Chosen in the browser" : "Best available";
 }
 
 view.addEventListener("click", async (e) => {
@@ -367,3 +385,52 @@ listen("settings", (e) => window.setTheme(e.payload.theme));
 
 if (params.has("confirm")) confirmView(Number(params.get("confirm")));
 else if (params.has("id")) progressView(Number(params.get("id")));
+
+// The system dropdown is a plain white list on Windows. This keeps the
+// <select> as the value holder but shows the choices in the app's own menu.
+const nativeValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!;
+function styledSelect(sel: HTMLSelectElement) {
+  if (sel.dataset.styled) return;
+  sel.dataset.styled = "1";
+  sel.hidden = true;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "dd";
+  btn.id = `${sel.id}-btn`;
+  sel.after(btn);
+  const label = () => { btn.innerHTML = `<span>${esc(sel.selectedOptions[0]?.text || "")}</span>${icon("chevron")}`; };
+  // Keep the button in step when code sets the value.
+  Object.defineProperty(sel, "value", {
+    get: () => nativeValue.get!.call(sel),
+    set: (v) => { nativeValue.set!.call(sel, v); label(); },
+  });
+  label();
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    document.querySelector(".dd-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "menu dd-menu";
+    menu.innerHTML = [...sel.options].map((o, i) =>
+      `<button type="button" data-i="${i}" class="${i === sel.selectedIndex ? "on" : ""}">${esc(o.text)}</button>`).join("");
+    document.body.append(menu);
+    const r = btn.getBoundingClientRect();
+    menu.style.minWidth = `${r.width}px`;
+    menu.style.left = `${Math.min(r.left, innerWidth - menu.offsetWidth - 8)}px`;
+    // Open downward if it fits, else upward; scroll if neither does.
+    const below = innerHeight - r.bottom - 8, above = r.top - 8;
+    const down = menu.offsetHeight <= below || below >= above;
+    menu.style.maxHeight = `${down ? below : above}px`;
+    menu.style.top = down ? `${r.bottom + 4}px` : `${r.top - 4 - Math.min(menu.offsetHeight, above)}px`;
+    (menu.querySelector(".on") as HTMLElement | null)?.scrollIntoView({ block: "nearest" });
+    const close = () => { menu.remove(); document.removeEventListener("click", close); };
+    menu.onclick = (ev) => {
+      const b = (ev.target as HTMLElement).closest<HTMLElement>("[data-i]");
+      if (!b) return;
+      sel.selectedIndex = Number(b.dataset.i);
+      label();
+      sel.dispatchEvent(new Event("change"));
+      close();
+    };
+    setTimeout(() => document.addEventListener("click", close));
+  };
+}

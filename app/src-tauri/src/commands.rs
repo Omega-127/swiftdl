@@ -229,6 +229,12 @@ pub fn is_media_url(url: String) -> bool {
     crate::media::is_media_url(url.trim())
 }
 
+/// What the video lookup is doing, when it is more than reading the page.
+#[tauri::command]
+pub fn probe_note() -> Option<String> {
+    crate::media::PROBE_NOTE.lock().unwrap().clone()
+}
+
 #[tauri::command]
 pub async fn probe_media(m: Mgr<'_>, url: String, headers: Vec<(String, String)>) -> Result<crate::media::MediaInfo, String> {
     crate::media::probe(m.client(), url.trim(), headers).await.map_err(|e| format!("{e:#}"))
@@ -238,7 +244,7 @@ pub async fn probe_media(m: Mgr<'_>, url: String, headers: Vec<(String, String)>
 /// "New download" window, like a link caught from the browser.
 #[tauri::command]
 pub fn open_new_download(m: Mgr, url: String) {
-    m.new_download_window(Incoming { url: url.trim().to_string(), filename: None, referrer: None, cookies: None, user_agent: None });
+    m.new_download_window(Incoming { url: url.trim().to_string(), filename: None, referrer: None, cookies: None, user_agent: None, qualities: None, pick: None });
 }
 
 #[tauri::command]

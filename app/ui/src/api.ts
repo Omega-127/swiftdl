@@ -57,6 +57,9 @@ export interface Incoming {
   referrer?: string | null;
   cookies?: string | null;
   userAgent?: string | null;
+  /** A video's qualities, read from the page by the extension. */
+  qualities?: Quality[] | null;
+  pick?: number | null;
 }
 
 export interface AppState { items: Item[]; settings: Settings; pending: Incoming[]; version: string }
@@ -78,6 +81,7 @@ export interface Commands {
   get_state: [void, AppState];
   probe_url: [{ url: string; headers: Header[] }, ProbeInfo];
   probe_media: [{ url: string; headers: Header[] }, MediaInfo];
+  probe_note: [void, string | null];
   is_media_url: [{ url: string }, boolean];
   is_torrent_url: [{ url: string; filename: string | null }, boolean];
   probe_torrent: [{ url: string; headers: Header[] }, TorrentInfo];

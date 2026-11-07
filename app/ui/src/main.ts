@@ -290,8 +290,18 @@ function renderInspector() {
 }
 
 // ---------- browser integration ----------
+let loadedOnce = false;
 async function loadIntegration() {
+  const before = state.integration?.lastSeen || 0;
   try { state.integration = await invoke("integration_status"); } catch { state.integration = null; }
+  const now = state.integration;
+  // The extension checks in as soon as it is added or reloaded: say so at once.
+  if (now?.lastSeen && now.lastSeen > before && (!before || $("dlg-ext").open)) {
+    const who = now.browsers.filter((x) => x.lastSeen).sort((x, y) => (y.lastSeen || 0) - (x.lastSeen || 0))[0];
+    if ($("dlg-ext").open) $("dlg-ext").close();
+    if (loadedOnce) toast(`Connected in ${who?.name || "your browser"}`, "ok");
+  }
+  loadedOnce = true;
   renderOnboard();
   if ($("dlg-settings").open) renderBrowserPanel();
 }
@@ -338,17 +348,9 @@ async function openExtensionGuide(browserId?: string) {
   if (b) openExtPage(b.id);
   // Check often while the guide is open, so it notices the connection at once.
   clearInterval(guidePoll);
-  const before = i?.lastSeen || 0;
-  guidePoll = window.setInterval(async () => {
+  guidePoll = window.setInterval(() => {
     if (!$("dlg-ext").open) return clearInterval(guidePoll);
-    await loadIntegration();
-    const now = state.integration;
-    if (now && (now.lastSeen || 0) > before) {
-      clearInterval(guidePoll);
-      const who = now.browsers.filter((x) => x.lastSeen).sort((x, y) => (y.lastSeen || 0) - (x.lastSeen || 0))[0];
-      $("dlg-ext").close();
-      toast(`Connected in ${who?.name || "your browser"}`, "ok");
-    }
+    loadIntegration();
   }, 1500);
 }
 async function openExtPage(id: string) {
@@ -903,7 +905,11 @@ async function boot() {
   ingest(s.items);
   nextPending();
   loadIntegration();
-  setInterval(loadIntegration, 15000);
+  // Every 2 s until a browser connects, so adding the extension shows up at
+  // once; after that a slow check is enough. Also on coming back to the window.
+  let tick = 0;
+  setInterval(() => { if (!state.integration?.lastSeen || ++tick % 8 === 0) loadIntegration(); }, 2000);
+  window.addEventListener("focus", () => loadIntegration());
   setTimeout(checkUpdate, 5000);
   setInterval(checkUpdate, 12 * 60 * 60 * 1000);
   await listen("downloads", (e) => ingest(e.payload));

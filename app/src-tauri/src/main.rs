@@ -9,6 +9,7 @@ mod media;
 mod native_host;
 mod settings;
 mod torrent;
+mod stream;
 mod update;
 mod windows;
 
@@ -65,7 +66,9 @@ fn main() {
         // Must be first: a second launch (e.g. from the extension) hands its
         // args to this window and exits.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if let Some(inc) = native_host::parse_add_arg(&args).or_else(|| torrent::parse_open_arg(&args)) {
+            if let Some(inc) = native_host::parse_prepare_arg(&args) {
+                app.state::<Arc<DownloadManager>>().prepare(&inc);
+            } else if let Some(inc) = native_host::parse_add_arg(&args).or_else(|| torrent::parse_open_arg(&args)) {
                 app.state::<Arc<DownloadManager>>().incoming(inc);
             } else {
                 show_main_window(app);
@@ -98,6 +101,11 @@ fn main() {
             mgr.start_ticker();
             // Launched by the browser extension: show only the small
             // download window, like IDM. Otherwise open the main window.
+            // Started only to look a video up: stay out of sight (tray).
+            if let Some(inc) = native_host::parse_prepare_arg(&args) {
+                mgr.prepare(&inc);
+                return Ok(());
+            }
             match native_host::parse_add_arg(&args).or_else(|| torrent::parse_open_arg(&args)) {
                 Some(inc) => mgr.incoming(inc),
                 None => show_main_window(app.handle()),
@@ -108,6 +116,7 @@ fn main() {
             commands::get_state,
             commands::probe_url,
             commands::probe_media,
+            commands::probe_note,
             commands::is_media_url,
             commands::is_torrent_url,
             commands::probe_torrent,
@@ -161,7 +170,7 @@ fn main() {
                     };
                     if let (Some(link), Some(mgr)) = (link, _app.try_state::<Arc<DownloadManager>>()) {
                         if torrent::is_torrent(&link, None) {
-                            mgr.incoming(manager::Incoming { url: link, filename: None, referrer: None, cookies: None, user_agent: None });
+                            mgr.incoming(manager::Incoming { url: link, filename: None, referrer: None, cookies: None, user_agent: None, qualities: None, pick: None });
                         }
                     }
                 }
