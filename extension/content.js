@@ -115,15 +115,38 @@
     wrap.style.top = `${Math.max(8, r.top + 10)}px`;
     raf = requestAnimationFrame(position);
   }
+  // YouTube: once the pointer has rested on a video for a moment, ask the app
+  // to look it up, so the download can start the moment a quality is picked.
+  // Once per video; a quick pass of the mouse doesn't count.
+  // leftAt: when the pointer last moved off the video (a resting pointer
+  // sends no events, so "left" is what can be seen, not "still there").
+  let prepTimer = 0, leftAt = 0;
+  const prepared = new Set();
+  function prepareSoon() {
+    // Called on every mouse move: start the countdown once, don't restart it.
+    if (prepTimer || !/(^|\.)youtube\.com$/i.test(location.hostname)) return;
+    const started = performance.now();
+    prepTimer = setTimeout(async () => {
+      prepTimer = 0;
+      // The pointer moved off during the countdown: it was only passing.
+      if (leftAt > started && !open) return;
+      const info = await askPage();
+      if (!info?.id || info.live || prepared.has(info.id) || !video) return;
+      prepared.add(info.id);
+      chrome.runtime.sendMessage({ type: "prepare", url: `https://www.youtube.com/watch?v=${info.id}` }).catch(() => {});
+    }, 1000);
+  }
+
   function show(v) {
     if (!host) build();
     mount();
     if (video !== v) { video = v; setOpen(false); }
+    prepareSoon();
     clearTimeout(hideTimer);
     wrap.classList.add("on");
     if (!raf) raf = requestAnimationFrame(position);
   }
-  function hide() { wrap?.classList.remove("on"); setOpen(false); video = null; }
+  function hide() { clearTimeout(prepTimer); prepTimer = 0; wrap?.classList.remove("on"); setOpen(false); video = null; }
   function scheduleHide() { clearTimeout(hideTimer); if (!open) hideTimer = setTimeout(hide, 1600); }
   function setOpen(v) { open = v; wrap?.classList.toggle("open", v); }
 
@@ -213,8 +236,8 @@
     // Just the video: a "list=" mix would make yt-dlp think about the playlist.
     const url = `https://www.youtube.com/watch?v=${info.id}`;
     qualityMenu(url, name, qualities);
-    // Start the slow part now, while the user picks a quality.
-    chrome.runtime.sendMessage({ type: "prepare", url }).catch(() => {});
+    // Start the slow part now, unless hovering already did.
+    if (!prepared.has(info.id)) { prepared.add(info.id); chrome.runtime.sendMessage({ type: "prepare", url }).catch(() => {}); }
     return true;
   }
 
@@ -263,7 +286,7 @@
         try { disabled = (await chrome.runtime.sendMessage({ type: "media" }))?.disabled ?? false; } catch { disabled = false; }
       }
       if (!disabled) show(v);
-    } else if (video) scheduleHide();
+    } else if (video) { leftAt = now; scheduleHide(); }
   }, { passive: true });
   document.addEventListener("click", (e) => { if (open && host && !e.composedPath().includes(host)) setOpen(false); }, true);
   chrome.storage.onChanged.addListener((c) => { if (c.disabledSites) disabled = null; });

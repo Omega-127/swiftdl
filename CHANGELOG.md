@@ -6,7 +6,7 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.3.4] - 2026-11-07
+## [0.3.5] - 2026-11-07
 
 ### Fixed
 - YouTube downloads for signed-in browsers. The browser's YouTube cookies
@@ -19,6 +19,9 @@ uses [Semantic Versioning](https://semver.org/).
 ### Changed
 - The video quality menu is one short row per quality with its size, and
   fits without a scrollbar.
+- On YouTube, the lookup starts once the pointer rests on a video for a
+  second (not on every video watched), so the download usually starts the
+  moment a quality is picked.
 
 ## [0.3.3] - 2026-11-07
 
@@ -240,8 +243,8 @@ uses [Semantic Versioning](https://semver.org/).
 - GitHub Actions for CI and tagged releases (Windows, macOS, Linux and the
   extension zip).
 
-[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.4...HEAD
-[0.3.4]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.3...v0.3.4
+[Unreleased]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.3...v0.3.5
 [0.3.3]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/harshsinghsv/swiftdl/compare/v0.3.0...v0.3.1
