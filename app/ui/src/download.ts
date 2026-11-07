@@ -7,7 +7,7 @@ import "./styles.css";
 import "./download.css";
 import { invoke, listen, currentWindow, LogicalSize, $ } from "./api";
 import type { Item, Incoming, Header, MediaInfo, TorrentInfo, AddRequest, ProbeInfo, Settings, Quality } from "./api";
-import { icon, CATS, catOf, bytes, speed, dur, when, esc, host, catInfo } from "./util";
+import { icon, CATS, catOf, bytes, speed, dur, when, esc, host, catInfo, segBar } from "./util";
 
 const win = currentWindow();
 
@@ -286,11 +286,11 @@ function render() {
     }[state];
     view.innerHTML = `
       <div class="d-head">${glyph(cat, it.filename)}<div class="d-name"><b title="${esc(it.filename)}">${esc(it.filename)}</b><div class="d-sub" id="p-sub"></div></div></div>
-      <div class="p-line"><div class="p-bar" id="p-bar"><i></i></div><span class="p-pct" id="p-pct"></span></div>
-      <div class="p-meta"><span id="p-left"></span><span id="p-right"></span></div>
+      <div class="p-top"><span id="p-left"></span><span class="p-pct" id="p-pct"></span></div>
+      <div class="segbar" id="p-bar"></div>
+      <div class="p-meta" id="p-right"></div>
       <div class="kv" id="p-kv"></div>
-      ${showDetails ? `<div class="conn"><div class="conn-head"><b>Connections</b><span id="p-conn-n"></span></div><div class="lanes" id="p-lanes"></div>
-        <div class="cscroll"><table class="ctable"><thead><tr><th>#</th><th>Downloaded</th><th>Progress</th><th>Status</th></tr></thead><tbody id="p-rows"></tbody></table></div></div>` : ""}
+      ${showDetails ? `<div class="conn"><div class="cscroll"><table class="ctable"><thead><tr><th>Part</th><th>Size</th><th>Received</th><th>Status</th></tr></thead><tbody id="p-rows"></tbody></table></div></div>` : ""}
       <div class="d-foot">
         ${!media && (state === "run" || state === "paused") ? `<button class="ghost-btn" data-a="details">${icon(showDetails ? "chevUp" : "chevDown")}${showDetails ? "Hide details" : "Show details"}</button>` : ""}
         <span class="grow"></span>${buttons}
@@ -298,20 +298,24 @@ function render() {
   }
 
   const dir = it.path.replace(/[\\/][^\\/]*$/, "");
+  // Every byte is in but the file is still being put together or checked.
+  const finishing = state === "run" && !!it.size && it.downloaded >= it.size;
   const status = {
-    run: [it.note || (media ? (it.downloaded ? "Downloading" : "Starting…") : it.connections ? `Downloading · ${it.connections} connection${it.connections === 1 ? "" : "s"}` : "Connecting…"), "var(--accent)"],
+    run: [it.note || (finishing ? "Finishing…" : media ? (it.downloaded ? "Downloading" : "Starting…") : it.connections ? "Downloading" : "Connecting…"), "var(--accent)"],
     paused: [it.status === "queued" ? "Waiting in queue" : "Paused", "var(--amber)"],
     done: ["Completed", "var(--green)"],
     error: [it.error || "Failed", "var(--red)"],
   }[state];
   setTitle(state === "done" ? "Download complete" : state === "error" ? "Download failed" : `${Math.floor(pct)}% · ${it.filename}`);
-  $("p-sub").innerHTML = `<span class="st ${state === "error" ? "err" : ""}" title="${esc(status[0])}">${esc(status[0])}</span><span>·</span><span>${esc(host(it.url))}</span>`;
+  $("p-sub").innerHTML = `<span class="st ${state === "error" ? "err" : ""}" title="${esc(status[0])}">${esc(status[0])}</span><span class="from">from ${esc(host(it.url))}</span>`;
   $("p-pct").textContent = it.size || state === "done" ? `${Math.floor(pct)}%` : "";
   $("p-left").textContent = state === "done" ? bytes(it.size) : it.size ? `${bytes(it.downloaded)} of ${bytes(it.size)}` : bytes(it.downloaded);
-  $("p-right").textContent = state === "run" ? `${speed(it.speed)} · ${dur(eta)} left` : state === "done" ? whenFull(it.completedAt) : "";
+  const conns = it.connections ? `${it.connections} connection${it.connections === 1 ? "" : "s"}` : "";
+  $("p-right").textContent = state === "run" && !finishing ? [speed(it.speed), `${dur(eta)} left`, conns].filter(Boolean).join("   ·   ")
+    : state === "done" ? `Finished ${whenFull(it.completedAt)}` : "";
   const bar = $("p-bar");
-  bar.className = `p-bar ${state} ${!it.size && state === "run" ? "indet" : ""}`;
-  (bar.firstElementChild as HTMLElement).style.width = `${pct}%`;
+  bar.className = `segbar ${state} ${!it.size && state === "run" ? "indet" : ""}`;
+  segBar(bar, null, undefined, pct);
   const row = (k: string, v: string, cls = "") => `<span class="k">${k}</span><span class="v"><span class="${cls}" title="${esc(v)}">${esc(v)}</span></span>`;
   const kv = row("Location", dir, "path") +
     (state === "done" ? "" : torrent ? row("Files", it.torrentFiles!.length ? `${it.torrentFiles!.length} selected` : "All") : media ? row("Quality", qualityLabel(it.format)) : row("Resume", it.resumable ? "Supported" : "Not supported by this server")) +
@@ -319,26 +323,11 @@ function render() {
   if ($("p-kv").innerHTML !== kv) $("p-kv").innerHTML = kv;
 
   if (showDetails) {
-    const size = it.size || 1;
     const segs = (it.segments || []).filter(([s, , e]) => e > s);
-    $("p-conn-n").textContent = segs.length ? `${segs.filter(([, p, e]) => p < e).length} active · ${segs.length} parts` : "";
-    // Start positions and progress by connection, IDM style: each part of
-    // the file is a slot, separated by a small gap, filled as it arrives.
-    const lanes = $("p-lanes");
-    lanes.className = `lanes ${paused ? "paused" : ""}`;
-    const html = segs.map(([s, p, e]) =>
-      `<span class="slot" style="left:calc(${(s / size) * 100}% + 1px);width:calc(${((e - s) / size) * 100}% - 2px)"><i style="width:${((p - s) / Math.max(1, e - s)) * 100}%"></i></span>`).join("");
-    if (lanes.children.length !== segs.length) lanes.innerHTML = html;
-    else segs.forEach(([s, p, e], i) => {
-      const slot = lanes.children[i] as HTMLElement;
-      slot.style.left = `calc(${(s / size) * 100}% + 1px)`;
-      slot.style.width = `calc(${((e - s) / size) * 100}% - 2px)`;
-      (slot.firstElementChild as HTMLElement).style.width = `${((p - s) / Math.max(1, e - s)) * 100}%`;
-    });
     $("p-rows").innerHTML = segs.map(([s, p, e], n) => {
-      const done = p >= e, frac = (p - s) / Math.max(1, e - s);
-      return `<tr><td>${n + 1}</td><td>${bytes(p - s)}</td><td><span class="mini"><i style="width:${frac * 100}%"></i></span></td><td class="${done ? "ok" : paused ? "" : "live"}">${done ? "Done" : paused ? "Paused" : "Receiving data…"}</td></tr>`;
-    }).join("") || `<tr><td colspan="4" class="muted">Connection details appear once the download starts.</td></tr>`;
+      const done = p >= e;
+      return `<tr class="${done ? "done" : ""}"><td>${n + 1}</td><td>${bytes(e - s)}</td><td>${Math.floor(((p - s) / Math.max(1, e - s)) * 100)}%</td><td>${done ? "Done" : paused ? "Paused" : "Receiving"}</td></tr>`;
+    }).join("") || `<tr><td colspan="4" class="muted">Parts appear once the download starts.</td></tr>`;
   }
 }
 

@@ -113,3 +113,15 @@ export function fileIcon(name: string, category?: string, size = 36): string {
     <span class="glyph">${icon(c.icon)}</span>${e ? `<span class="ext">${e}</span>` : ""}</span>`;
 }
 
+
+// One progress bar for the whole file. Each connection fills its own part
+// of it, with a hairline where one part ends and the next begins, so the bar
+// shows both overall progress and how the parts are going.
+export function segBar(el: HTMLElement, size: number | null, segments: [number, number, number][] | undefined, pct: number) {
+  const segs = size ? (segments || []).filter(([s, , e]) => e > s) : [];
+  const fills: [number, number][] = segs.length ? segs.map(([s, p]) => [(s / size!) * 100, ((p - s) / size!) * 100]) : [[0, pct]];
+  const marks = segs.slice(1).map(([s]) => (s / size!) * 100);
+  if (el.childElementCount !== fills.length + marks.length) el.innerHTML = "<i></i>".repeat(fills.length) + "<b></b>".repeat(marks.length);
+  fills.forEach(([l, w], k) => { const i = el.children[k] as HTMLElement; i.style.left = `${l}%`; i.style.width = `${w}%`; });
+  marks.forEach((l, k) => { (el.children[fills.length + k] as HTMLElement).style.left = `${l}%`; });
+}

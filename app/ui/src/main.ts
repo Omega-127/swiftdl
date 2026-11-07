@@ -4,7 +4,7 @@
 import "./styles.css";
 import { invoke, listen, currentWindow, $ } from "./api";
 import type { Item, Settings, IntegrationStatus, BrowserStatus, Incoming, ProbeInfo, Header, Status, Commands, UpdateInfo } from "./api";
-import { icon, CATS, parts, bytes, speed, dur, when, esc, host } from "./util";
+import { icon, CATS, parts, bytes, speed, dur, when, esc, host, segBar } from "./util";
 
 const appWindow = currentWindow();
 const target = (e: Event) => e.target as HTMLElement;
@@ -85,7 +85,7 @@ function grouped(list: Item[]) {
 const orderIds = () => grouped(visible()).flatMap((g) => g.items.map((i) => i.id));
 
 // ---------- charts ----------
-function areaChart(canvas: HTMLCanvasElement, data: number[], { grid = false } = {}) {
+function areaChart(canvas: HTMLCanvasElement, data: number[], { grid = false, fill = true } = {}) {
   const dpr = devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;
   if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
@@ -129,7 +129,7 @@ function areaChart(canvas: HTMLCanvasElement, data: number[], { grid = false } =
   area.lineTo(pts[pts.length - 1][0], h - bottom); area.lineTo(pts[0][0], h - bottom); area.closePath();
   const g = ctx.createLinearGradient(0, 0, 0, h);
   g.addColorStop(0, accent + "40"); g.addColorStop(1, accent + "00");
-  ctx.fillStyle = g; ctx.fill(area);
+  if (fill) { ctx.fillStyle = g; ctx.fill(area); }
   ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.stroke(path);
 }
 
@@ -233,31 +233,6 @@ function renderList() {
   return list;
 }
 
-// ---------- connection slots ----------
-// Same view as the download window: each connection's part of the file is
-// a rounded slot, filled as far as that connection has got. When nothing is
-// running (no live segments) it falls back to a single bar.
-function renderLanes(el: HTMLElement, it: Item) {
-  const size = it.size || 1;
-  const segs = (it.segments || []).filter(([s, , e]) => e > s);
-  const paused = it.status !== "downloading";
-  if (!segs.length) {
-    const html = `<div class="lanes-empty ${paused ? "paused" : ""}"><i style="width:${pct(it)}%"></i></div>`;
-    if (el.innerHTML !== html) el.innerHTML = html;
-    return 0;
-  }
-  if (el.firstElementChild?.className !== `lanes ${paused ? "paused" : ""}` || el.firstElementChild!.children.length !== segs.length) {
-    el.innerHTML = `<div class="lanes ${paused ? "paused" : ""}">${segs.map(() => `<span class="slot"><i></i></span>`).join("")}</div>`;
-  }
-  segs.forEach(([s, p, e], i) => {
-    const slot = el.firstElementChild!.children[i] as HTMLElement;
-    slot.style.left = `calc(${(s / size) * 100}% + 1px)`;
-    slot.style.width = `calc(${((e - s) / size) * 100}% - 2px)`;
-    (slot.firstElementChild as HTMLElement).style.width = `${((p - s) / Math.max(1, e - s)) * 100}%`;
-  });
-  return segs.filter(([, p, e]) => p < e).length;
-}
-
 // ---------- inspector ----------
 let insKey: string | null = null;
 function renderInspector() {
@@ -269,38 +244,33 @@ function renderInspector() {
   const dl = it.status === "downloading";
   if (insKey !== key) {
     insKey = key;
-    const hasMap = it.status !== "completed" && it.size;
     panel.innerHTML = `<div class="ins-scroll">
         <div class="ins-top"><span class="ins-glyph">${icon(cat(it).icon)}</span><div class="ins-head"><div class="ins-title">${esc(it.filename)}</div><div class="ins-meta" id="ins-chips"></div></div><button class="sq-btn" data-ins="close" title="Close (Esc)">${icon("x")}</button></div>
-        <div class="ins-sec"><div class="ins-sec-head">Progress<span id="ins-pct"></span></div><div class="ins-bar" id="ins-bar"><i></i></div><dl class="props" id="ins-stats"></dl></div>
-        ${hasMap ? `<div class="ins-sec"><div class="ins-sec-head">Connections<span id="ins-conn"></span></div><div id="ins-map"></div></div>` : ""}
+        <div class="ins-sec"><div class="ins-sec-head">Progress<span id="ins-pct"></span></div><div class="segbar" id="ins-bar"></div><dl class="props" id="ins-stats"></dl></div>
         <div class="ins-sec" id="ins-graph-sec"><div class="ins-sec-head">Speed<span id="ins-peak"></span></div><canvas id="ins-graph"></canvas></div>
         <div class="ins-sec"><div class="ins-sec-head">Details</div><dl class="props" id="ins-props"></dl></div>
       </div>
       <div class="ins-foot" id="ins-foot"></div>`;
   }
-  const dotColor = ({ downloading: "var(--accent)", queued: "var(--faint)", paused: "var(--amber)", completed: "var(--green)", error: "var(--red)" } as Record<Status, string>)[it.status];
-  const meta = `<span class="dot" style="background:${dotColor}"></span><span>${STATUS[it.status]}</span><span>·</span><span>${esc(it.category)}</span><span>·</span><span class="trunc">${esc(host(it.url))}</span>`;
+  const finishing = dl && !!it.size && it.downloaded >= it.size;
+  const meta = `<span class="st-${it.status}">${finishing ? "Finishing…" : STATUS[it.status]}</span><span class="trunc">from ${esc(host(it.url))}</span>`;
   if ($("ins-chips").innerHTML !== meta) $("ins-chips").innerHTML = meta;
 
   $("ins-pct").textContent = it.size ? `${Math.floor(pct(it))}%` : "";
   const bar = $("ins-bar");
-  bar.className = `ins-bar ${it.status}`;
-  (bar.firstElementChild as HTMLElement).style.width = `${pct(it)}%`;
+  bar.className = `segbar ${it.status}`;
+  segBar(bar, null, undefined, pct(it));
   const row = (k: string, v: string) => `<dt>${k}</dt><dd><span>${v}</span></dd>`;
   const stats = it.status === "completed"
     ? row("Size", bytes(it.size)) + row("Finished", when(it.completedAt) || "—")
     : row("Downloaded", it.size ? `${bytes(it.downloaded)} of ${bytes(it.size)}` : bytes(it.downloaded)) +
-      (dl ? row("Speed", speed(it.speed)) + row("Time left", dur(eta(it))) : "");
+      (dl && !finishing ? row("Speed", speed(it.speed)) + row("Time left", dur(eta(it))) : "") +
+      (dl && it.connections ? row("Connections", String(it.connections)) : "");
   if ($("ins-stats").innerHTML !== stats) $("ins-stats").innerHTML = stats;
 
-  if ($("ins-map")) {
-    const active = renderLanes($("ins-map"), it);
-    $("ins-conn").textContent = dl ? `${active || it.connections} active` : it.status === "paused" ? "Paused" : "";
-  }
   const hist = state.speedHist.get(it.id) || [];
   $("ins-graph-sec").hidden = !hist.some((v: number) => v > 0);
-  if (!$("ins-graph-sec").hidden) { areaChart($("ins-graph"), hist, { grid: true }); $("ins-peak").textContent = `Peak ${speed(Math.max(...hist))}`; }
+  if (!$("ins-graph-sec").hidden) { areaChart($("ins-graph"), hist, { fill: false }); $("ins-peak").textContent = `Peak ${speed(Math.max(...hist))}`; }
 
   const dir = it.path.replace(/[\\/][^\\/]*$/, "");
   const props = `
